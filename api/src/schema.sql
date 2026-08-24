@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS schools (
   slug text UNIQUE NOT NULL, currency char(3) NOT NULL DEFAULT 'XOF',
   locale text NOT NULL DEFAULT 'fr-SN', created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_status text NOT NULL DEFAULT 'active';
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_due_date date;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS suspended_at timestamptz;
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   name text NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL,
