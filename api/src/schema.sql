@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   amount_minor bigint NOT NULL CHECK(amount_minor >= 0), currency char(3) NOT NULL, due_date date NOT NULL,
   status text NOT NULL DEFAULT 'unpaid' CHECK(status IN ('unpaid','partial','paid','cancelled')), created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS fee_type text NOT NULL DEFAULT 'other';
 CREATE TABLE IF NOT EXISTS payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   student_id uuid NOT NULL REFERENCES students(id), invoice_id uuid REFERENCES invoices(id),
