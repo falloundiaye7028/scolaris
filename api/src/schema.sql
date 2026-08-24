@@ -12,6 +12,15 @@ CREATE TABLE IF NOT EXISTS users (
   name text NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL,
   role text NOT NULL CHECK(role IN ('owner','director','accountant','teacher')), created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS subscription_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  amount_minor bigint NOT NULL CHECK(amount_minor > 0), currency char(3) NOT NULL DEFAULT 'XOF',
+  method text NOT NULL, reference text NOT NULL, paid_at timestamptz NOT NULL DEFAULT now(),
+  coverage_end date NOT NULL, notes text, recorded_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,reference)
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_payments_date ON subscription_payments(paid_at DESC);
 CREATE TABLE IF NOT EXISTS students (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   matricule text NOT NULL, first_name text NOT NULL, last_name text NOT NULL, class_name text,
