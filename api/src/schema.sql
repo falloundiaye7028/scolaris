@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS receipts (
   payment_id uuid NOT NULL UNIQUE REFERENCES payments(id), number text NOT NULL,
   issued_at timestamptz NOT NULL DEFAULT now(), UNIQUE(school_id,number)
 );
+CREATE TABLE IF NOT EXISTS reminders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  guardian_id uuid NOT NULL REFERENCES guardians(id), invoice_id uuid NOT NULL REFERENCES invoices(id),
+  channel text NOT NULL CHECK(channel IN ('email','sms','whatsapp')), message text NOT NULL,
+  status text NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','sent','failed','cancelled')),
+  scheduled_at timestamptz NOT NULL DEFAULT now(), sent_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_queue ON reminders(status,scheduled_at);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id bigserial PRIMARY KEY, school_id uuid NOT NULL, user_id uuid, action text NOT NULL,
   entity text NOT NULL, entity_id text, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
