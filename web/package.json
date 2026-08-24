@@ -2,7 +2,8 @@
   "name": "scolaris-web",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "node -e \"console.log('Interface web à venir sur le port 5173')\""
+    "dev": "node server.js"
   }
 }
