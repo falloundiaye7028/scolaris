@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS payments (
   amount_minor bigint NOT NULL CHECK(amount_minor > 0), currency char(3) NOT NULL,
   method text NOT NULL, reference text NOT NULL, paid_at timestamptz NOT NULL DEFAULT now(), UNIQUE(school_id,reference)
 );
+CREATE TABLE IF NOT EXISTS receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  payment_id uuid NOT NULL UNIQUE REFERENCES payments(id), number text NOT NULL,
+  issued_at timestamptz NOT NULL DEFAULT now(), UNIQUE(school_id,number)
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id bigserial PRIMARY KEY, school_id uuid NOT NULL, user_id uuid, action text NOT NULL,
   entity text NOT NULL, entity_id text, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
