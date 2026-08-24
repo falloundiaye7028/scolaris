@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS students (
   guardian_name text, guardian_phone text, status text NOT NULL DEFAULT 'active', created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(school_id,matricule)
 );
+CREATE TABLE IF NOT EXISTS school_counters (
+  school_id uuid PRIMARY KEY REFERENCES schools(id) ON DELETE CASCADE,
+  student_next bigint NOT NULL DEFAULT 1 CHECK(student_next > 0)
+);
 CREATE TABLE IF NOT EXISTS academic_years (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   label text NOT NULL, starts_on date NOT NULL, ends_on date NOT NULL, is_current boolean NOT NULL DEFAULT false,
