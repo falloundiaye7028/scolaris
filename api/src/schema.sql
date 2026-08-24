@@ -15,6 +15,30 @@ CREATE TABLE IF NOT EXISTS students (
   guardian_name text, guardian_phone text, status text NOT NULL DEFAULT 'active', created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(school_id,matricule)
 );
+CREATE TABLE IF NOT EXISTS academic_years (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  label text NOT NULL, starts_on date NOT NULL, ends_on date NOT NULL, is_current boolean NOT NULL DEFAULT false,
+  UNIQUE(school_id,label), CHECK(ends_on > starts_on)
+);
+CREATE TABLE IF NOT EXISTS classes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  academic_year_id uuid NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
+  name text NOT NULL, level text, capacity integer CHECK(capacity IS NULL OR capacity > 0), UNIQUE(school_id,academic_year_id,name)
+);
+CREATE TABLE IF NOT EXISTS guardians (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  full_name text NOT NULL, phone text, email text, preferred_language text NOT NULL DEFAULT 'fr', created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS student_guardians (
+  student_id uuid NOT NULL REFERENCES students(id) ON DELETE CASCADE, guardian_id uuid NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
+  relationship text NOT NULL, is_primary boolean NOT NULL DEFAULT false, PRIMARY KEY(student_id,guardian_id)
+);
+CREATE TABLE IF NOT EXISTS enrollments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id uuid NOT NULL REFERENCES students(id) ON DELETE CASCADE, class_id uuid NOT NULL REFERENCES classes(id),
+  academic_year_id uuid NOT NULL REFERENCES academic_years(id), status text NOT NULL DEFAULT 'active', enrolled_at date NOT NULL DEFAULT CURRENT_DATE,
+  UNIQUE(student_id,academic_year_id)
+);
 CREATE TABLE IF NOT EXISTS invoices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   student_id uuid NOT NULL REFERENCES students(id) ON DELETE CASCADE, label text NOT NULL,
@@ -32,5 +56,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   entity text NOT NULL, entity_id text, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_students_school ON students(school_id);
+CREATE INDEX IF NOT EXISTS idx_guardians_school ON guardians(school_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_school ON enrollments(school_id,academic_year_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_school_status ON invoices(school_id,status);
 CREATE INDEX IF NOT EXISTS idx_payments_school_date ON payments(school_id,paid_at DESC);
