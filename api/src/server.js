@@ -3,19 +3,23 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
 const port = Number(process.env.PORT || 3000);
 const secret = process.env.JWT_SECRET || 'development-only-change-me';
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || 'postgres://scolaris:scolaris_dev@localhost:5432/scolaris' });
+let schemaReady;
+const ensureSchema = () => schemaReady ||= readFile(new URL('./schema.sql', import.meta.url), 'utf8').then(sql => pool.query(sql));
 const json = (res,status,data) => { res.writeHead(status,{'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*','access-control-allow-headers':'content-type, authorization'}); res.end(JSON.stringify(data)); };
 const csv = (res,name,rows) => { const quote=v=>`"${String(v??'').replaceAll('"','""')}"`; const output=rows.map(r=>r.map(quote).join(',')).join('\n'); res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${name}"`,'access-control-allow-origin':'*'}); res.end('\ufeff'+output); };
 const body = async req => { let raw=''; for await (const c of req) raw+=c; return raw ? JSON.parse(raw) : {}; };
 const auth = req => { const token=req.headers.authorization?.replace(/^Bearer /,''); if(!token) throw Error('unauthorized'); return jwt.verify(token,secret); };
 const route = (method,path) => `${method} ${path}`;
 
-const server=http.createServer(async(req,res)=>{
+const handler=async(req,res)=>{
   if(req.method==='OPTIONS') return json(res,204,{});
   try {
+    await ensureSchema();
     const url=new URL(req.url,'http://localhost');
     if(route(req.method,url.pathname)==='GET /api/health') { await pool.query('SELECT 1'); return json(res,200,{status:'ok',service:'scolaris-api'}); }
     if(route(req.method,url.pathname)==='POST /api/auth/bootstrap') {
@@ -52,5 +56,10 @@ const server=http.createServer(async(req,res)=>{
     if(route(req.method,url.pathname)==='GET /api/dashboard') { const q=await pool.query(`SELECT COALESCE(sum(amount_minor),0)::text expected,COALESCE(sum(amount_minor) FILTER(WHERE status='paid'),0)::text paid,COUNT(*) FILTER(WHERE status!='paid')::int unpaid_count FROM invoices WHERE school_id=$1`,[me.schoolId]); return json(res,200,q.rows[0]); }
     return json(res,404,{error:'Route introuvable'});
   } catch(e){ console.error(e); return json(res,e.message==='unauthorized'?401:500,{error:e.message==='unauthorized'?'Authentification requise':'Erreur interne'}); }
-});
-server.listen(port,'0.0.0.0',()=>console.log(`SCOLARIS API : http://localhost:${port}`));
+};
+
+if (!process.env.VERCEL) {
+  http.createServer(handler).listen(port,'0.0.0.0',()=>console.log(`SCOLARIS API : http://localhost:${port}`));
+}
+
+export default handler;
