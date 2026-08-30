@@ -121,6 +121,20 @@ test("le HTML public ne contient aucune interface ou donnée privée", async () 
   assert.match(privateHtml, /noindex,nofollow,noarchive/);
 });
 
+test("la démonstration vidéo est accessible, différée et sans lecture automatique", async () => {
+  const [publicHtml, webServer] = await Promise.all([
+    readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../../web/server.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(publicHtml, /id="demonstration"/);
+  assert.match(publicHtml, /<video[^>]+controls[^>]+playsinline[^>]+preload="metadata"/);
+  assert.match(publicHtml, /poster="\/demo-scolaris-pay-poster\.png"/);
+  assert.match(publicHtml, /<source src="\/demo-scolaris-pay\.mp4" type="video\/mp4">/);
+  assert.match(publicHtml, /<figcaption[^>]+id="demonstration-caption"/);
+  assert.doesNotMatch(publicHtml, /<video[^>]+autoplay/);
+  assert.match(webServer, /"\/demo-scolaris-pay\.mp4": \["demo-scolaris-pay\.mp4", "video\/mp4"\]/);
+});
+
 test("l'inscription publique annonce le prix fixe sans proposer de paiement en ligne", async () => {
   const [home, registration, registrationScript, server] = await Promise.all([
     readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
