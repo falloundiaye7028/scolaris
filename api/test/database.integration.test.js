@@ -90,6 +90,22 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.notEqual(storedSession.token_hash, rawToken);
   assert.ok(new Date(storedSession.expires_at) < new Date(storedSession.absolute_expires_at));
 
+  const schoolAStudent = students.rows.find((row) => row.school_id === schoolA).id;
+  const dueDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const invoiceResponse = await request("/api/invoices", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, label: "Mensualité test", amountMinor: 10_000, currency: "XOF", dueDate, feeType: "tuition" }) });
+  assert.equal(invoiceResponse.status, 201);
+  const invoice = await invoiceResponse.json();
+  const paymentResponse = await request("/api/payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ invoiceId: invoice.id, amountMinor: 4_000, currency: "XOF", method: "Wave", reference: "PAY-TEST-001" }) });
+  assert.equal(paymentResponse.status, 201);
+  const payment = await paymentResponse.json();
+  assert.equal(payment.invoiceStatus, "partial");
+  assert.match(payment.receipt.number, /^SCP-/);
+  const receipts = await request("/api/receipts", { headers: { cookie } });
+  assert.equal(receipts.status, 200);
+  assert.ok((await receipts.json()).some((receipt) => receipt.id === payment.receipt.id));
+  const excessivePayment = await request("/api/payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ invoiceId: invoice.id, amountMinor: 7_000, currency: "XOF", method: "Espèces" }) });
+  assert.equal(excessivePayment.status, 400);
+
   const privateApp = await request("/app", { headers: { cookie } });
   assert.equal(privateApp.status, 200);
   assert.match(privateApp.headers.get("content-type"), /^text\/html/);

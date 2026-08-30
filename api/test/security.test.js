@@ -122,6 +122,10 @@ test("l'application privée n'utilise plus d'attribut d'événement inline et sa
   assert.doesNotMatch(script, /document\.write|\beval\s*\(|new Function/);
   const handlers = script.match(/const actionHandlers=\{([^}]+)\}/)?.[1].split(",").map((name) => name.trim()) || [];
   for (const handler of handlers) assert.match(script, new RegExp(`(?:async\\s+)?function\\s+${handler}\\s*\\(`), `action sans fonction: ${handler}`);
+  const referencedHandlers = [...script.matchAll(/data-(?:action|change|input)="([A-Za-z][A-Za-z0-9]*)\(/g)].map((match) => match[1]);
+  for (const handler of referencedHandlers) assert.ok(handlers.includes(handler), `action non enregistrée: ${handler}`);
+  assert.doesNotMatch(script, /data-action="paymentModal\(\)"[^>]*disabled|disabled[^>]*data-action="paymentModal\(\)"/);
+  assert.match(script, /function paymentModal\(\)[^{]*\{[\s\S]*?navigate\('students'\)[\s\S]*?navigate\('invoices'\)/);
   const hash = crypto.createHash("sha256").update(script).digest("base64");
   assert.match(server, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
   assert.match(vercel, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
