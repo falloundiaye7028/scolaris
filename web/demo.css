@@ -44,8 +44,8 @@
 
 .demonstration {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, .72fr);
-  gap: clamp(42px, 8vw, 96px);
+  grid-template-columns: minmax(0, .78fr) minmax(420px, 1.22fr);
+  gap: clamp(32px, 6vw, 72px);
   align-items: center;
   background: linear-gradient(145deg, #f4fbf8, #fff);
 }
@@ -71,10 +71,10 @@
 
 .demonstration-player video {
   display: block;
-  width: min(100%, 405px);
+  width: min(100%, 720px);
   height: auto;
-  aspect-ratio: 9 / 16;
-  object-fit: cover;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
   border: 1px solid #cdded7;
   border-radius: 26px;
   background: var(--green);
@@ -87,7 +87,7 @@
 }
 
 .demonstration-player figcaption {
-  max-width: 405px;
+  max-width: 720px;
   color: var(--muted);
   font-size: 14px;
   text-align: center;
@@ -113,7 +113,7 @@
   }
 
   .demonstration-player video {
-    width: min(100%, 360px);
-    border-radius: 20px;
+    width: 100%;
+    border-radius: 16px;
   }
 }

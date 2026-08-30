@@ -129,6 +129,7 @@ test("la démonstration vidéo est accessible, différée et sans lecture automa
   assert.match(publicHtml, /id="demonstration"/);
   assert.match(publicHtml, /<video[^>]+controls[^>]+playsinline[^>]+preload="metadata"/);
   assert.match(publicHtml, /poster="\/demo-scolaris-pay-poster\.png"/);
+  assert.match(publicHtml, /<video[^>]+width="1280" height="720"/);
   assert.match(publicHtml, /<source src="\/demo-scolaris-pay\.mp4" type="video\/mp4">/);
   assert.match(publicHtml, /<figcaption[^>]+id="demonstration-caption"/);
   assert.doesNotMatch(publicHtml, /<video[^>]+autoplay/);
