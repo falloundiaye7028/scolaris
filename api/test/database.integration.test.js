@@ -26,7 +26,9 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   process.env.MFA_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
   process.env.MFA_ENFORCEMENT = "off";
   process.env.CRON_SECRET = "integration-cron-secret";
-  process.env.SCHOOL_REGISTRATION_WEBHOOK_URL = "https://registration-webhook.test/confirm";
+  delete process.env.SCHOOL_REGISTRATION_WEBHOOK_URL;
+  process.env.RESEND_API_KEY = "re_integration_test_only";
+  process.env.RESEND_FROM_EMAIL = "SCOLARIS PAY <noreply@mail.scolarispay.online>";
   process.env.VERCEL = "1";
   process.env.VERCEL_ENV = "preview";
   const [{ default: handler, closeDatabase }, { default: pg }, { default: bcrypt }] = await Promise.all([
@@ -46,11 +48,11 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const originalFetch = globalThis.fetch;
-  const registrationNotifications = [];
+  const sentEmails = [];
   globalThis.fetch = async (input, options = {}) => {
-    if (String(input) === process.env.SCHOOL_REGISTRATION_WEBHOOK_URL) {
-      registrationNotifications.push(JSON.parse(options.body));
-      return new Response(JSON.stringify({ accepted: true }), { status: 202, headers: { "content-type": "application/json" } });
+    if (String(input) === "https://api.resend.com/emails") {
+      sentEmails.push({ headers: options.headers, ...JSON.parse(options.body) });
+      return new Response(JSON.stringify({ id: "email-integration-test" }), { status: 200, headers: { "content-type": "application/json" } });
     }
     return originalFetch(input, options);
   };
@@ -189,9 +191,12 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await admin.query("SELECT count(*)::int total FROM users WHERE email='direction-inscription@example.test'")).rows[0].total, 1);
   const invalidRegistration = await request("/api/public/school-registrations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...registrationPayload, schoolName: "École Invalide", professionalEmail: "invalide-pro@example.test", responsibleEmail: "invalide@example.test", schoolPhone: "123" }) });
   assert.equal(invalidRegistration.status, 400);
-  const confirmationNotification = registrationNotifications.find((item) => item.event === "registration.confirmation");
-  assert.ok(confirmationNotification?.confirmationUrl);
-  const confirmationUrl = new URL(confirmationNotification.confirmationUrl);
+  const confirmationNotification = sentEmails.find((item) => item.subject === "Confirmez votre inscription à SCOLARIS PAY");
+  assert.deepEqual(confirmationNotification?.to, ["direction-inscription@example.test"]);
+  assert.equal(confirmationNotification?.from, "SCOLARIS PAY <noreply@mail.scolarispay.online>");
+  assert.match(confirmationNotification?.headers?.authorization || "", /^Bearer re_/);
+  assert.ok(confirmationNotification?.headers?.["Idempotency-Key"]);
+  const confirmationUrl = new URL(confirmationNotification.text.match(/https:\/\/[^\s]+/)?.[0]);
   const confirmationToken = new URLSearchParams(confirmationUrl.hash.slice(1)).get("token");
   const confirmation = await request("/api/public/school-registration/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: confirmationToken }) });
   assert.equal(confirmation.status, 200);

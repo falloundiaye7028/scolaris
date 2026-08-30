@@ -112,10 +112,11 @@ test("le HTML public ne contient aucune interface ou donnée privée", async () 
 });
 
 test("l'inscription publique annonce le prix fixe sans proposer de paiement en ligne", async () => {
-  const [home, registration, registrationScript] = await Promise.all([
+  const [home, registration, registrationScript, server] = await Promise.all([
     readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../../web/inscription-ecole.html", import.meta.url), "utf8"),
     readFile(new URL("../../web/registration.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
   ]);
   assert.match(home, /50[\s  ]*000 FCFA/i);
   assert.match(home, /aucun paiement en ligne/i);
@@ -124,6 +125,8 @@ test("l'inscription publique annonce le prix fixe sans proposer de paiement en l
   assert.match(registrationScript, /registration-challenge/);
   assert.match(registrationScript, /data\.available === false/);
   assert.match(registration + registrationScript, /school-registrations/);
+  assert.match(server, /https:\/\/api\.resend\.com\/emails/);
+  assert.doesNotMatch(registration + registrationScript, /RESEND_API_KEY|re_[A-Za-z0-9_-]{20,}/);
   assert.doesNotMatch(home + registration + registrationScript, /Stripe|PayPal|checkout|paymentIntent/i);
 });
 
