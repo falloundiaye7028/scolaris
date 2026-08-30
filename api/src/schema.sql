@@ -7,12 +7,16 @@ CREATE TABLE IF NOT EXISTS schools (
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_status text NOT NULL DEFAULT 'active';
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_due_date date;
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS suspended_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS deletion_requested_at timestamptz;
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   name text NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL,
   role text NOT NULL CHECK(role IN ('owner','director','accountant','teacher')), created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_platform_admin boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz NOT NULL DEFAULT now();
 UPDATE users SET is_platform_admin=true
 WHERE id=(SELECT id FROM users ORDER BY created_at,id LIMIT 1)
   AND NOT EXISTS(SELECT 1 FROM users WHERE is_platform_admin=true);
@@ -27,6 +31,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_agent_hash text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_hash text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS absolute_expires_at timestamptz;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS reauthenticated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'password';
+UPDATE sessions SET absolute_expires_at=expires_at WHERE absolute_expires_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash) WHERE token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id,expires_at) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS login_attempts (
   attempt_key text PRIMARY KEY,
@@ -34,6 +44,60 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   first_attempt_at timestamptz NOT NULL DEFAULT now(),
   locked_until timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  requested_ip_hash text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id,expires_at DESC);
+CREATE TABLE IF NOT EXISTS user_mfa (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  secret_ciphertext text NOT NULL,
+  enabled_at timestamptz,
+  verified_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash text NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(user_id,code_hash)
+);
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  challenge_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  attempts integer NOT NULL DEFAULT 0,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS security_events (
+  id bigserial PRIMARY KEY,
+  school_id uuid,
+  user_id uuid,
+  event_type text NOT NULL,
+  severity text NOT NULL CHECK(severity IN ('info','warning','critical')),
+  outcome text NOT NULL,
+  ip_hash text,
+  user_agent_hash text,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_security_events_type_date ON security_events(event_type,created_at DESC);
+CREATE TABLE IF NOT EXISTS import_limits (
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  window_started_at timestamptz NOT NULL DEFAULT now(),
+  attempts integer NOT NULL DEFAULT 0,
+  PRIMARY KEY(school_id,user_id)
 );
 CREATE TABLE IF NOT EXISTS subscription_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

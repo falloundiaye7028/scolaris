@@ -1,0 +1,5 @@
+Contact: https://wa.me/221778001717
+Expires: 2027-08-29T23:59:59Z
+Canonical: https://www.scolarispay.online/.well-known/security.txt
+Policy: https://www.scolarispay.online/protection-donnees
+Preferred-Languages: fr, en

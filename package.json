@@ -5,6 +5,10 @@
   "scripts": {
     "test": "npm --prefix api test",
     "lint": "npm --prefix api run lint && npm --prefix web run lint",
-    "build": "npm run lint && npm run test"
+    "typecheck": "npm --prefix api run typecheck && npm --prefix web run lint",
+    "security:secrets": "node scripts/scan-secrets.mjs",
+    "security:history": "node scripts/scan-history-secrets.mjs",
+    "security:audit": "npm audit --prefix api --audit-level=high",
+    "build": "npm run lint && npm run typecheck && npm run test"
   }
 }

@@ -8,13 +8,16 @@
     "start": "node src/server.js",
     "migrate": "node src/migrate.js",
     "test": "node --test",
-    "lint": "node --check src/server.js && node --check src/security.js",
+    "lint": "node --check src/server.js && node --check src/security.js && node --check src/auth-security.js && node --check src/auth-service.js && node --check src/migrate.js",
+    "typecheck": "npm run lint",
     "build": "npm run lint && npm test"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.2",
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.16.3",
-    "read-excel-file": "^5.8.8"
+    "argon2": "0.45.1",
+    "bcryptjs": "3.0.3",
+    "fflate": "0.7.5",
+    "jsonwebtoken": "9.0.3",
+    "pg": "8.23.0",
+    "read-excel-file": "5.8.8"
   }
 }

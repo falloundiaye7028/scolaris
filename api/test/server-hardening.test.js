@@ -3,19 +3,21 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
 test("l'API n'accepte plus de Bearer frontend ni de CORS universel", () => {
   assert.doesNotMatch(server, /authorization\?\.replace\(\/\^Bearer/);
   assert.doesNotMatch(server, /access-control-allow-origin['"]\s*:\s*['"]\*/i);
-  assert.match(server, /parseCookies\(req\.headers\.cookie\)/);
+  assert.match(authService, /parseCookies\(req\.headers\.cookie\)/);
 });
 
-test("déconnexion, expiration et renouvellement sont effectifs côté serveur", () => {
-  assert.match(server, /UPDATE sessions SET revoked_at=now\(\)/);
-  assert.match(server, /s\.expires_at>now\(\)/);
-  assert.match(server, /UPDATE sessions SET expires_at=\$1,last_seen_at=now\(\)/);
-  assert.match(server, /clearSessionCookie/);
+test("déconnexion, expiration absolue et inactivité sont effectives côté serveur", () => {
+  assert.match(authService, /UPDATE sessions SET revoked_at=now\(\)/);
+  assert.match(authService, /s\.expires_at>now\(\) AND s\.absolute_expires_at>now\(\)/);
+  assert.match(authService, /LEAST\(absolute_expires_at,now\(\)\+interval '30 minutes'\)/);
+  assert.match(authService, /token_hash/);
+  assert.match(authService, /clearSessionCookie/);
 });
 
 test("le super-administrateur est explicite et les relations tenant sont vérifiées", () => {
@@ -35,10 +37,47 @@ test("les routes privées ne sont ni publiques, ni indexables, ni mises en cache
   assert.match(JSON.stringify(appHeaders), /private, no-store/);
 });
 
+test("Vercel applique les en-têtes transverses demandés", () => {
+  const serialized = JSON.stringify(vercel.headers);
+  for (const header of ["Strict-Transport-Security", "Cross-Origin-Opener-Policy", "Cross-Origin-Resource-Policy", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "X-Frame-Options"]) {
+    assert.match(serialized, new RegExp(header));
+  }
+});
+
 test("l'import vérifie taille, extension et signature Excel", () => {
   assert.match(server, /3\*1024\*1024/);
   assert.match(server, /buffer\[0\]!==0x50\|\|buffer\[1\]!==0x4b/);
   assert.match(server, /Maximum 1 000 élèves par import/);
+  assert.match(server, /vbaProject/);
+  assert.match(server, /Les formules Excel ne sont pas autorisées/);
+});
+
+test("les réponses privées imposent des en-têtes de sécurité et aucun cache", () => {
+  for (const header of ["strict-transport-security", "cross-origin-opener-policy", "cross-origin-resource-policy", "x-frame-options", "pragma", "x-robots-tag"]) {
+    assert.match(server, new RegExp(header));
+  }
+  assert.match(server, /no-store, private/);
+});
+
+test("les exports sont bornés, réauthentifiés et journalisés", () => {
+  assert.match(server, /LIMIT 5001/);
+  assert.match(server, /requireRecentAuthentication\(me\)/);
+  assert.match(server, /students\.exported/);
+  assert.match(server, /payments\.exported/);
+});
+
+test("la MFA privilégiée est appliquée côté serveur et consommée une seule fois", () => {
+  assert.match(server, /mfaEnrollmentRequired&&!me\.mfaEnabled/);
+  assert.match(server, /POST \/api\/students\/import[\s\S]{0,120}requireRecentAuthentication\(me\)/);
+  assert.match(server, /POST \/api\/payments[\s\S]{0,120}requireRecentAuthentication\(me\)/);
+  assert.match(authService, /UPDATE mfa_challenges SET consumed_at=now\(\).*RETURNING id/);
+  assert.match(authService, /if \(!consumed\.rowCount\) throw new Error\("invalid_mfa"\)/);
+  assert.match(authService, /disableMfa = async \(req, me, password\)/);
+});
+
+test("les réponses SQL publiques sélectionnent explicitement leurs champs", () => {
+  assert.doesNotMatch(server, /SELECT \*/);
+  assert.doesNotMatch(server, /RETURNING \*/);
 });
 
 test("les codes parent ne sont jamais placés dans une URL", () => {

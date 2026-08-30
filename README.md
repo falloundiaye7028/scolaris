@@ -6,8 +6,11 @@ Plateforme scolaire multi-établissements pour le suivi des élèves, échéance
 
 ```bash
 npm run lint
+npm run typecheck
 npm test
 npm run build
+npm run security:secrets
+npm run security:audit
 npm --prefix api run migrate
 ```
 
@@ -17,13 +20,16 @@ Les tests d'intégration PostgreSQL (connexion, limitation, expiration, révocat
 
 ## Sécurité
 
-- sessions JWT de huit heures conservées dans un cookie `HttpOnly`, `Secure` en production et `SameSite=Lax` ;
-- sessions enregistrées en base, renouvelables et révocables par déconnexion ;
-- limitation persistante des connexions après cinq échecs ;
+- identifiants de session opaques et aléatoires, stockés uniquement sous forme HMAC en base ;
+- cookies `HttpOnly`, `Secure` en production, `SameSite=Lax`, inactivité de 30 minutes et plafond absolu de huit heures ;
+- cinq sessions actives maximum, affichables et révocables ;
+- migration progressive bcrypt vers Argon2id après une connexion valide ;
+- limitation persistante et progressive par compte, adresse IP et appareil ;
+- MFA TOTP chiffrée et codes de récupération à usage unique, derrière `MFA_ENFORCEMENT=off` par défaut ;
 - rôles et permissions vérifiés côté serveur ;
 - toutes les requêtes scolaires filtrées par `school_id` ;
 - exports CSV protégés contre les formules et imports limités/validés ;
 - vitrine, connexion et application privée servies sur des routes distinctes ;
 - CSP, en-têtes de sécurité, `robots.txt` et `sitemap.xml` configurés.
 
-Voir `docs/SECURITY_MIGRATION.md` avant tout déploiement. Ne jamais enregistrer de secret, mot de passe ou donnée scolaire dans les logs.
+Voir `docs/SECURITY_MIGRATION.md`, `docs/OPERATIONS_SECURITY.md` et `docs/DEPLOYMENT_CHECKLIST.md` avant tout déploiement. Ne jamais enregistrer de secret, mot de passe ou donnée scolaire dans les logs.

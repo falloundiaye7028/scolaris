@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
@@ -6,6 +7,11 @@ import {
   clearSessionCookie,
   hasPermission,
   isAllowedBrowserOrigin,
+  hasSpreadsheetFormula,
+  isOpaqueSessionToken,
+  loginAttemptKeys,
+  newOpaqueToken,
+  pagination,
   parseCookies,
   permissionFor,
   quoteCsv,
@@ -20,6 +26,36 @@ test("le cookie de session n'est pas accessible au JavaScript", () => {
   assert.match(cookie, /SameSite=Lax/);
   assert.match(cookie, /Path=\//);
   assert.doesNotMatch(clearSessionCookie(), /Max-Age=[1-9]/);
+});
+
+test("les identifiants de session sont opaques et aléatoires", () => {
+  const first = newOpaqueToken();
+  const second = newOpaqueToken();
+  assert.equal(isOpaqueSessionToken(first), true);
+  assert.equal(first.length, 43);
+  assert.notEqual(first, second);
+  assert.doesNotMatch(first, /\./);
+});
+
+test("la limitation distingue compte, adresse et appareil", () => {
+  const req = { headers: { "x-forwarded-for": "192.0.2.4", "user-agent": "Test Browser" }, socket: {} };
+  const keys = loginAttemptKeys(req, "USER@EXAMPLE.TEST", "test-secret");
+  assert.match(keys.account, /^account:/);
+  assert.match(keys.address, /^address:/);
+  assert.match(keys.device, /^device:/);
+  assert.match(keys.combined, /^combined:/);
+  assert.equal(Object.keys(keys).length, 4);
+});
+
+test("la pagination impose des bornes strictes", () => {
+  assert.deepEqual(pagination(new URLSearchParams("limit=20&offset=40")), { limit: 20, offset: 40 });
+  assert.throws(() => pagination(new URLSearchParams("limit=201")), /invalid_body/);
+  assert.throws(() => pagination(new URLSearchParams("offset=-1")), /invalid_body/);
+});
+
+test("les formules de tableur importées sont refusées", () => {
+  for (const value of ["=1+1", " +cmd", "\tmalveillant", "\rmalveillant", "@SUM(A1)"]) assert.equal(hasSpreadsheetFormula(value), true);
+  assert.equal(hasSpreadsheetFormula("Awa Ndiaye"), false);
 });
 
 test("le parseur de cookies ne confond pas les valeurs", () => {
@@ -75,6 +111,23 @@ test("le HTML public ne contient aucune interface ou donnée privée", async () 
   assert.match(privateHtml, /noindex,nofollow,noarchive/);
 });
 
+test("l'application privée n'utilise plus d'attribut d'événement inline et sa CSP verrouille le script", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const vercel = await readFile(new URL("../../vercel.json", import.meta.url), "utf8");
+  assert.doesNotMatch(privateHtml, /\s(?:onclick|onchange|oninput)\s*=/i);
+  const script = privateHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new vm.Script(script));
+  assert.doesNotMatch(script, /document\.write|\beval\s*\(|new Function/);
+  const handlers = script.match(/const actionHandlers=\{([^}]+)\}/)?.[1].split(",").map((name) => name.trim()) || [];
+  for (const handler of handlers) assert.match(script, new RegExp(`(?:async\\s+)?function\\s+${handler}\\s*\\(`), `action sans fonction: ${handler}`);
+  const hash = crypto.createHash("sha256").update(script).digest("base64");
+  assert.match(server, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
+  assert.match(vercel, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
+  assert.doesNotMatch(server.match(/content-security-policy[^\n]+/)?.[0] || "", /script-src[^;]*unsafe-inline/);
+});
+
 test("le formulaire de connexion utilise POST et les attributs d'accessibilité attendus", async () => {
   const html = await readFile(new URL("../../web/connexion.html", import.meta.url), "utf8");
   assert.match(html, /<form[^>]+method="post"[^>]+action="\/api\/auth\/login"/);
@@ -89,4 +142,26 @@ test("le portail parent rend les données uniquement avec des nœuds texte", asy
   assert.match(script, /textContent = text/);
   assert.match(script, /replaceChildren\(\)/);
   assert.doesNotMatch(script, /innerHTML|document\.write/);
+});
+
+test("le référencement n'expose aucune route privée et utilise le PNG social attendu", async () => {
+  const [robots, sitemap, index, securityText, image] = await Promise.all([
+    readFile(new URL("../../web/robots.txt", import.meta.url), "utf8"),
+    readFile(new URL("../../web/sitemap.xml", import.meta.url), "utf8"),
+    readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../../web/.well-known/security.txt", import.meta.url), "utf8"),
+    readFile(new URL("../../web/og-scolaris-pay.png", import.meta.url)),
+  ]);
+  assert.match(robots, /Disallow: \/app/);
+  assert.match(robots, /Disallow: \/admin/);
+  assert.match(robots, /Disallow: \/connexion/);
+  assert.match(robots, /Disallow: \/api\//);
+  assert.doesNotMatch(sitemap, /connexion|\/app|\/admin|\/api\//);
+  assert.match(index, /twitter:card[^>]+summary_large_image/);
+  assert.match(index, /og-scolaris-pay\.png/);
+  assert.equal(image.readUInt32BE(16), 1200);
+  assert.equal(image.readUInt32BE(20), 630);
+  assert.match(securityText, /^Contact:/m);
+  assert.match(securityText, /^Expires:/m);
+  assert.match(securityText, /^Canonical:/m);
 });

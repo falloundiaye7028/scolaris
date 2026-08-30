@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 
 export const SESSION_COOKIE = "scolaris_session";
-export const SESSION_TTL_SECONDS = 8 * 60 * 60;
+export const SESSION_IDLE_SECONDS = 30 * 60;
+export const SESSION_ABSOLUTE_SECONDS = 8 * 60 * 60;
+export const SESSION_TTL_SECONDS = SESSION_ABSOLUTE_SECONDS;
+export const SESSION_LIMIT_PER_USER = 5;
 
 export function parseCookies(header = "") {
   return Object.fromEntries(
@@ -65,6 +68,26 @@ export function loginAttemptKey(req, email, secret) {
   return opaqueDigest(`${clientAddress(req)}\n${normalizeEmail(email)}`, secret);
 }
 
+export function loginAttemptKeys(req, email, secret) {
+  const address = clientAddress(req);
+  const normalizedEmail = normalizeEmail(email);
+  const device = String(req.headers["user-agent"] ?? "").slice(0, 512);
+  return {
+    account: `account:${opaqueDigest(normalizedEmail, secret)}`,
+    address: `address:${opaqueDigest(address, secret)}`,
+    device: `device:${opaqueDigest(`${address}\n${device}`, secret)}`,
+    combined: `combined:${opaqueDigest(`${address}\n${normalizedEmail}\n${device}`, secret)}`,
+  };
+}
+
+export function newOpaqueToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString("base64url");
+}
+
+export function isOpaqueSessionToken(value) {
+  return /^[A-Za-z0-9_-]{43}$/.test(String(value ?? ""));
+}
+
 export function isAllowedBrowserOrigin(req, allowedOrigins = []) {
   const origin = req.headers.origin;
   if (!origin) return true;
@@ -105,6 +128,31 @@ export function validateJsonValue(value, depth = 0) {
       validateJsonValue(item, depth + 1);
     }
   }
+}
+
+export function safeText(value, { min = 0, max = 255, pattern } = {}) {
+  const text = String(value ?? "").trim();
+  if (text.length < min || text.length > max || text.includes("\0") || (pattern && !pattern.test(text))) {
+    throw new Error("invalid_body");
+  }
+  return text;
+}
+
+export function positiveInteger(value, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < min || number > max) throw new Error("invalid_body");
+  return number;
+}
+
+export function pagination(searchParams, { defaultLimit = 100, maxLimit = 200 } = {}) {
+  const limit = positiveInteger(searchParams.get("limit") || defaultLimit, { min: 1, max: maxLimit });
+  const offset = Number(searchParams.get("offset") || 0);
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) throw new Error("invalid_body");
+  return { limit, offset };
+}
+
+export function hasSpreadsheetFormula(value) {
+  return /^[=+\-@\t\r]/.test(String(value ?? "").replace(/^ +/, ""));
 }
 
 const ROLE_PERMISSIONS = {

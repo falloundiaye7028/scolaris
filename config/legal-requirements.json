@@ -1,0 +1,22 @@
+{
+  "commercialProductionBlocked": true,
+  "blockReason": "Les informations juridiques officielles et les obligations applicables auprès de la CDP sénégalaise doivent être validées avant toute utilisation commerciale avec des données réelles.",
+  "requiredInformation": [
+    "raison_sociale_ou_identite_editeur",
+    "forme_juridique",
+    "adresse_officielle",
+    "ninea",
+    "rccm",
+    "responsable_publication",
+    "hebergeur",
+    "responsable_traitement",
+    "durees_conservation",
+    "fondements_juridiques",
+    "sous_traitants",
+    "localisation_donnees",
+    "procedure_exercice_droits",
+    "modalites_suppression_restitution",
+    "procedure_gestion_incidents",
+    "validation_obligations_cdp_senegal"
+  ]
+}
