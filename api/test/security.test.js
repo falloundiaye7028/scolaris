@@ -135,6 +135,21 @@ test("la démonstration vidéo est accessible, différée et sans lecture automa
   assert.match(webServer, /"\/demo-scolaris-pay\.mp4": \["demo-scolaris-pay\.mp4", "video\/mp4"\]/);
 });
 
+test("la bannière d'accueil est responsive, différée et présentée comme une démonstration", async () => {
+  const [publicHtml, webServer, banner] = await Promise.all([
+    readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../../web/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../../web/banniere-scolaris-pay.png", import.meta.url)),
+  ]);
+  assert.match(publicHtml, /<figure class="home-banner">/);
+  assert.match(publicHtml, /src="\/banniere-scolaris-pay\.png"[^>]+width="1942" height="809"[^>]+loading="lazy"/);
+  assert.match(publicHtml, /class="home-banner-brand brand"[^>]+aria-hidden="true"/);
+  assert.match(publicHtml, /statistiques affichés sont fictifs/i);
+  assert.match(webServer, /"\/banniere-scolaris-pay\.png": \["banniere-scolaris-pay\.png", "image\/png"\]/);
+  assert.equal(banner.readUInt32BE(16), 1942);
+  assert.equal(banner.readUInt32BE(20), 809);
+});
+
 test("l'inscription publique annonce le prix fixe sans proposer de paiement en ligne", async () => {
   const [home, registration, registrationScript, server] = await Promise.all([
     readFile(new URL("../../web/index.html", import.meta.url), "utf8"),

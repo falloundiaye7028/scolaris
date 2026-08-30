@@ -22,6 +22,7 @@ const files = {
   "/security.js": ["security.js", "text/javascript; charset=utf-8"],
   "/brand.css": ["brand.css", "text/css; charset=utf-8"],
   "/brand-icon.png": ["brand-icon.png", "image/png"],
+  "/banniere-scolaris-pay.png": ["banniere-scolaris-pay.png", "image/png"],
   "/robots.txt": ["robots.txt", "text/plain; charset=utf-8"],
   "/sitemap.xml": ["sitemap.xml", "application/xml; charset=utf-8"],
 };

@@ -1,3 +1,47 @@
+.home-banner {
+  max-width: 1440px;
+  margin: 0 auto 34px;
+  padding: 0 24px;
+}
+
+.home-banner-frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #d7e5df;
+  border-radius: 26px;
+  background: #fff;
+  box-shadow: 0 24px 70px #123c321f;
+}
+
+.home-banner-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.home-banner-brand {
+  position: absolute;
+  top: 4%;
+  left: 3%;
+  width: 30.5%;
+  height: 17%;
+  padding-right: 1%;
+  background: linear-gradient(90deg, #fff 88%, #ffffffed);
+  font-size: clamp(10px, 2.7vw, 45px);
+}
+
+.home-banner-brand img {
+  width: auto;
+  height: 100%;
+}
+
+.home-banner figcaption {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 .demonstration {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, .72fr);
@@ -60,6 +104,14 @@
 }
 
 @media (max-width: 540px) {
+  .home-banner {
+    padding: 0 12px;
+  }
+
+  .home-banner-frame {
+    border-radius: 16px;
+  }
+
   .demonstration-player video {
     width: min(100%, 360px);
     border-radius: 20px;
