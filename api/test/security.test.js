@@ -86,10 +86,20 @@ test("les origines navigateur étrangères sont refusées", () => {
 test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(hasPermission("owner", "payments.write"), true);
   assert.equal(hasPermission("accountant", "payments.write"), true);
+  assert.equal(hasPermission("owner", "fee_definitions.write"), true);
+  assert.equal(hasPermission("director", "fee_adjustments.write"), true);
+  assert.equal(hasPermission("owner", "uniform_delivery.write"), true);
+  assert.equal(hasPermission("accountant", "fee_definitions.write"), false);
+  assert.equal(hasPermission("accountant", "fee_adjustments.write"), false);
   assert.equal(hasPermission("teacher", "payments.write"), false);
   assert.equal(hasPermission("teacher", "billing.read"), false);
   assert.equal(hasPermission("unknown", "students.read"), false);
   assert.equal(permissionFor("POST", "/api/students"), "students.write");
+  assert.equal(permissionFor("POST", "/api/fee-definitions"), "fee_definitions.write");
+  assert.equal(permissionFor("POST", "/api/fee-assignments/123/adjust"), "fee_adjustments.write");
+  assert.equal(permissionFor("PUT", "/api/uniform-assignments/123/delivery"), "uniform_delivery.write");
+  assert.equal(permissionFor("POST", "/api/student-fee-payments"), "payments.write");
+  assert.equal(permissionFor("GET", "/api/students/123/statement"), "billing.read");
   assert.equal(permissionFor("GET", "/api/exports/students.csv"), "exports.read");
 });
 
@@ -149,6 +159,19 @@ test("l'application privée n'utilise plus d'attribut d'événement inline et sa
   assert.match(server, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
   assert.match(vercel, new RegExp(hash.replace(/[+/?=]/g, "\\$&")));
   assert.doesNotMatch(server.match(/content-security-policy[^\n]+/)?.[0] || "", /script-src[^;]*unsafe-inline/);
+});
+
+test("l'interface financière couvre les frais annuels, les versements et la remise des tenues", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /Frais d’inscription/);
+  assert.match(privateHtml, /Tenue scolaire/);
+  assert.match(privateHtml, /Tous les élèves actifs de l’année/);
+  assert.match(privateHtml, /Confirmer la création collective/);
+  assert.match(privateHtml, /Montant du versement/);
+  assert.match(privateHtml, /uniformDeliveryModal/);
+  assert.match(privateHtml, /Rapports séparés par catégorie/);
+  assert.match(privateHtml, /academicYearModal/);
+  assert.match(privateHtml, /enrollmentModal/);
 });
 
 test("le formulaire de connexion utilise POST et les attributs d'accessibilité attendus", async () => {

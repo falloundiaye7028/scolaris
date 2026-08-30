@@ -64,7 +64,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const passwordHash = await bcrypt.hash("MotDePasse#2026", 12);
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
   const [schoolA, schoolB] = schools.rows.map((row) => row.id);
-  await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Direction A','direction-a@example.test',$3,'owner'),($1,'Enseignant A','teacher-a@example.test',$3,'teacher'),($2,'Direction B','direction-b@example.test',$3,'owner')", [schoolA, schoolB, passwordHash]);
+  await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Direction A','direction-a@example.test',$3,'owner'),($1,'Caisse A','caisse-a@example.test',$3,'accountant'),($1,'Enseignant A','teacher-a@example.test',$3,'teacher'),($2,'Direction B','direction-b@example.test',$3,'owner')", [schoolA, schoolB, passwordHash]);
   const platformSchool = (await admin.query("INSERT INTO schools(name,slug,subscription_status,professional_email,email_verified_at) VALUES('Administration SCOLARIS','administration-scolaris','active','platform@example.test',now()) RETURNING id")).rows[0].id;
   await admin.query("INSERT INTO users(school_id,name,email,password_hash,role,is_platform_admin,email_verified_at) VALUES($1,'Administrateur plateforme','platform@example.test',$2,'owner',true,now())", [platformSchool, passwordHash]);
   await admin.query("INSERT INTO school_subscriptions(school_id,status,is_exempt,started_at,current_period_start,current_period_end,paid_until,grace_period_end) VALUES($1,'active',false,now(),now(),now()+interval '30 days',now()+interval '30 days',now()+interval '37 days'),($2,'active',false,now(),now(),now()+interval '30 days',now()+interval '30 days',now()+interval '37 days'),($3,'active',true,now(),now(),now()+interval '100 years',now()+interval '100 years',now()+interval '100 years')", [schoolA, schoolB, platformSchool]);
@@ -123,6 +123,150 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const excessivePayment = await request("/api/payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ invoiceId: invoice.id, amountMinor: 7_000, currency: "XOF", method: "Espèces" }) });
   assert.equal(excessivePayment.status, 400);
 
+  const currentYearResponse = await request("/api/academic-years", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ label: "2026-2027", startsOn: "2026-09-01", endsOn: "2027-07-31", isCurrent: true }) });
+  assert.equal(currentYearResponse.status, 201);
+  const currentYear = await currentYearResponse.json();
+  const nextYearResponse = await request("/api/academic-years", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ label: "2027-2028", startsOn: "2027-09-01", endsOn: "2028-07-31" }) });
+  assert.equal(nextYearResponse.status, 201);
+  const nextYear = await nextYearResponse.json();
+  const currentClassResponse = await request("/api/classes", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, name: "6e A", level: "6e" }) });
+  assert.equal(currentClassResponse.status, 201);
+  const currentClass = await currentClassResponse.json();
+  const nextClassResponse = await request("/api/classes", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: nextYear.id, name: "5e A", level: "5e" }) });
+  assert.equal(nextClassResponse.status, 201);
+  const nextClass = await nextClassResponse.json();
+  const secondStudentResponse = await request("/api/students", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ firstName: "=Alerte", lastName: "CSV", guardianName: "Parent CSV" }) });
+  assert.equal(secondStudentResponse.status, 201);
+  const secondStudent = await secondStudentResponse.json();
+  for (const studentId of [schoolAStudent, secondStudent.id]) {
+    assert.equal((await request("/api/enrollments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId, classId: currentClass.id, academicYearId: currentYear.id }) })).status, 201);
+  }
+  assert.equal((await request("/api/enrollments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, classId: nextClass.id, academicYearId: nextYear.id }) })).status, 201);
+
+  const registrationDefinition = { academicYearId: currentYear.id, classId: currentClass.id, name: "Inscription annuelle", feeType: "registration", amountXof: 25_000, isMandatory: true };
+  const registrationPreview = await request("/api/fee-assignments/preview", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: registrationDefinition, scope: "class", classId: currentClass.id, dueDate: "2026-09-15" }) });
+  assert.equal(registrationPreview.status, 200);
+  assert.deepEqual(await registrationPreview.json(), { feeType: "registration", feeTypeLabel: "Frais d’inscription", academicYearId: currentYear.id, scope: "class", studentCount: 2, amountUnitXof: 25_000, amountTotalXof: 50_000, dueDate: "2026-09-15", classIds: [currentClass.id], studentIds: [] });
+  const registrationBulkPayload = { definition: registrationDefinition, scope: "class", classId: currentClass.id, dueDate: "2026-09-15", confirmed: true };
+  const registrationBulk = await request("/api/fee-assignments/bulk", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(registrationBulkPayload) });
+  assert.equal(registrationBulk.status, 201);
+  const registrationCreated = await registrationBulk.json();
+  assert.equal(registrationCreated.created, 2);
+  const duplicateRegistrationFees = await request("/api/fee-assignments/bulk", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(registrationBulkPayload) });
+  assert.equal(duplicateRegistrationFees.status, 201);
+  assert.equal((await duplicateRegistrationFees.json()).skippedDuplicates, 2);
+
+  const nextRegistration = await request("/api/fee-assignments/bulk", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: { ...registrationDefinition, academicYearId: nextYear.id, classId: nextClass.id }, scope: "student", studentId: schoolAStudent, dueDate: "2027-09-15", confirmed: true }) });
+  assert.equal(nextRegistration.status, 201);
+  const nextRegistrationData = await nextRegistration.json();
+  assert.equal(nextRegistrationData.created, 1);
+
+  const uniformBulk = await request("/api/fee-assignments/bulk", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: { academicYearId: currentYear.id, classId: currentClass.id, name: "Tenue complète 2026", feeType: "uniform", amountXof: 30_000, isMandatory: false }, scope: "class", classId: currentClass.id, dueDate: "2026-10-01", uniformItem: { itemType: "Uniforme complet", size: "M", quantity: 1, unitPriceXof: 30_000 }, confirmed: true }) });
+  assert.equal(uniformBulk.status, 201);
+  const uniformCreated = await uniformBulk.json();
+  assert.equal(uniformCreated.created, 2);
+
+  const schoolAInvoices = await request(`/api/invoices?academicYearId=${currentYear.id}`, { headers: { cookie } });
+  assert.equal(schoolAInvoices.status, 200);
+  const currentInvoices = await schoolAInvoices.json();
+  const registrationInvoice = currentInvoices.find((item) => item.student_id === schoolAStudent && item.fee_type === "registration");
+  const uniformInvoice = currentInvoices.find((item) => item.student_id === schoolAStudent && item.fee_type === "uniform");
+  const exemptUniformInvoice = currentInvoices.find((item) => item.student_id === secondStudent.id && item.fee_type === "uniform");
+  assert.ok(registrationInvoice && uniformInvoice && exemptUniformInvoice);
+  assert.equal(uniformInvoice.delivery_status, "to_prepare");
+
+  const discount = await request(`/api/fee-assignments/${uniformInvoice.id}/adjust`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "discount", discountXof: 5_000, reason: "Remise sociale validée par la direction" }) });
+  assert.equal(discount.status, 200);
+  assert.equal((await discount.json()).discountXof, 5_000);
+  const exemption = await request(`/api/fee-assignments/${exemptUniformInvoice.id}/adjust`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "exempt", reason: "Exonération sociale validée par la direction" }) });
+  assert.equal(exemption.status, 200);
+  assert.equal((await exemption.json()).financialStatus, "exempted");
+
+  const partialRegistration = await request("/api/student-fee-payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: registrationInvoice.id, amountXof: 10_000 }], method: "Wave", reference: "FRAIS-TEST-001" }) });
+  assert.equal(partialRegistration.status, 201);
+  const partialRegistrationData = await partialRegistration.json();
+  assert.equal(partialRegistrationData.financialStatus, "partially_paid");
+  const splitPayment = await request("/api/student-fee-payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: registrationInvoice.id, amountXof: 15_000 }, { invoiceId: uniformInvoice.id, amountXof: 10_000 }], method: "Espèces", reference: "FRAIS-TEST-002" }) });
+  assert.equal(splitPayment.status, 201);
+  const splitPaymentData = await splitPayment.json();
+  assert.equal(splitPaymentData.allocations.length, 2);
+  const finalUniformPayment = await request("/api/student-fee-payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: uniformInvoice.id, amountXof: 15_000 }], method: "Virement", reference: "FRAIS-TEST-003" }) });
+  assert.equal(finalUniformPayment.status, 201);
+  assert.equal((await finalUniformPayment.json()).financialStatus, "paid");
+  assert.equal((await request("/api/student-fee-payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: uniformInvoice.id, amountXof: 1 }], method: "Espèces", reference: "FRAIS-TEST-OVER" }) })).status, 400);
+
+  const paidUniformBeforeDelivery = (await (await request(`/api/invoices?studentId=${schoolAStudent}&feeType=uniform`, { headers: { cookie } })).json())[0];
+  assert.equal(paidUniformBeforeDelivery.financial_status, "paid");
+  assert.equal(paidUniformBeforeDelivery.delivery_status, "to_prepare");
+  const delivered = await request(`/api/uniform-assignments/${uniformInvoice.id}/delivery`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ deliveryStatus: "delivered", deliveryNote: "Remise au parent contre signature" }) });
+  assert.equal(delivered.status, 200);
+  assert.equal((await delivered.json()).delivery_status, "delivered");
+
+  const cancelNextRegistration = await request(`/api/fee-assignments/${nextRegistrationData.invoiceIds[0]}/adjust`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", reason: "Inscription reportée dans un autre établissement" }) });
+  assert.equal(cancelNextRegistration.status, 200);
+  assert.equal((await cancelNextRegistration.json()).financialStatus, "cancelled");
+
+  const enhancedReceipts = await (await request("/api/receipts", { headers: { cookie } })).json();
+  const splitReceipt = enhancedReceipts.find((item) => item.id === splitPaymentData.receipt.id);
+  assert.equal(splitReceipt.school_name, "École A");
+  assert.equal(splitReceipt.matricule, "A-001");
+  assert.equal(splitReceipt.allocations.length, 2);
+  assert.equal(splitReceipt.recorded_by_name, "Direction A");
+  assert.ok(splitReceipt.allocations.some((item) => item.category === "Tenue scolaire" && item.itemType === "Uniforme complet"));
+  assert.ok(splitReceipt.allocations.every((item) => item.academicYear === "2026-2027"));
+  const partialReceipt = enhancedReceipts.find((item) => item.id === partialRegistrationData.receipt.id);
+  assert.equal(Number(partialReceipt.allocations[0].totalPaidXof), 10_000);
+  assert.equal(Number(partialReceipt.allocations[0].balanceXof), 15_000);
+
+  const registrationReport = await request(`/api/reports/fees?feeType=registration&academicYearId=${currentYear.id}`, { headers: { cookie } });
+  assert.equal(registrationReport.status, 200);
+  const registrationReportData = await registrationReport.json();
+  assert.equal(Number(registrationReportData.expected_xof), 50_000);
+  assert.equal(Number(registrationReportData.paid_xof), 25_000);
+  assert.equal(registrationReportData.paid_students, 1);
+  assert.equal(registrationReportData.unpaid_count, 1);
+  const uniformReport = await request(`/api/reports/fees?feeType=uniform&academicYearId=${currentYear.id}`, { headers: { cookie } });
+  assert.equal(uniformReport.status, 200);
+  const uniformReportData = await uniformReport.json();
+  assert.equal(Number(uniformReportData.expected_xof), 25_000);
+  assert.equal(Number(uniformReportData.paid_xof), 25_000);
+  assert.equal(uniformReportData.exempted_count, 1);
+  assert.equal(uniformReportData.delivery.delivered, 1);
+  assert.ok(uniformReportData.delivery.details.some((item) => item.itemType === "Uniforme complet" && item.size === "M"));
+  const feeExport = await request(`/api/exports/fees.csv?feeType=uniform&academicYearId=${currentYear.id}`, { headers: { cookie } });
+  assert.equal(feeExport.status, 200);
+  const feeExportText = await feeExport.text();
+  assert.match(feeExportText, /Tenue scolaire/);
+  assert.match(feeExportText, /'=Alerte/);
+  const statement = await request(`/api/students/${schoolAStudent}/statement`, { headers: { cookie } });
+  assert.equal(statement.status, 200);
+  const statementData = await statement.json();
+  assert.equal(statementData.summary.registration.balanceXof, 0);
+  assert.equal(statementData.summary.uniform.deliveryStatuses[0], "delivered");
+  const invalidDeliveryReversal = await request(`/api/uniform-assignments/${uniformInvoice.id}/delivery`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ deliveryStatus: "available", deliveryNote: "Erreur" }) });
+  assert.equal(invalidDeliveryReversal.status, 400);
+  const correctedDelivery = await request(`/api/uniform-assignments/${uniformInvoice.id}/delivery`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ deliveryStatus: "available", deliveryNote: "Remise annulée après vérification du bordereau" }) });
+  assert.equal(correctedDelivery.status, 200);
+  assert.equal((await correctedDelivery.json()).delivery_status, "available");
+  assert.equal(Number((await admin.query("SELECT count(*)::int total FROM uniform_delivery_events WHERE school_id=$1 AND invoice_id=$2", [schoolA, uniformInvoice.id])).rows[0].total), 2);
+  assert.equal(Number((await admin.query("SELECT count(*)::int total FROM platform_subscription_payments WHERE school_id=$1", [schoolA])).rows[0].total), 0);
+
+  const accountantLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "caisse-a@example.test", password: "MotDePasse#2026" }) });
+  assert.equal(accountantLogin.status, 200);
+  const accountantCookie = accountantLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/fee-definitions", { method: "POST", headers: { cookie: accountantCookie, "content-type": "application/json" }, body: JSON.stringify(registrationDefinition) })).status, 403);
+  const secondRegistrationInvoice = currentInvoices.find((item) => item.student_id === secondStudent.id && item.fee_type === "registration");
+  const accountantPayment = await request("/api/student-fee-payments", { method: "POST", headers: { cookie: accountantCookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: secondRegistrationInvoice.id, amountXof: 1_000 }], method: "Espèces", reference: "CAISSE-TEST-001" }) });
+  assert.equal(accountantPayment.status, 201);
+  const accountantPaymentData = await accountantPayment.json();
+  const cancelledStudentPayment = await request(`/api/student-payments/${accountantPaymentData.paymentBatch.id}/cancel`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ reason: "Erreur de saisie confirmée par le responsable" }) });
+  assert.equal(cancelledStudentPayment.status, 200);
+  assert.equal((await cancelledStudentPayment.json()).status, "cancelled");
+
+  const schoolBLoginForFees = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "School B Fee Isolation" }, body: JSON.stringify({ email: "direction-b@example.test", password: "MotDePasse#2026" }) });
+  const schoolBFeeCookie = schoolBLoginForFees.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/student-fee-payments", { method: "POST", headers: { cookie: schoolBFeeCookie, "content-type": "application/json", "user-agent": "School B Fee Isolation" }, body: JSON.stringify({ allocations: [{ invoiceId: registrationInvoice.id, amountXof: 1 }], method: "Espèces", reference: "ISOLATION-TEST" }) })).status, 404);
+
   const privateApp = await request("/app", { headers: { cookie } });
   assert.equal(privateApp.status, 200);
   assert.match(privateApp.headers.get("content-type"), /^text\/html/);
@@ -136,7 +280,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const ownStudents = await request("/api/students", { headers: { cookie } });
   assert.equal(ownStudents.status, 200);
   const ownStudentRows = await ownStudents.json();
-  assert.deepEqual(ownStudentRows.map((student) => student.matricule), ["A-001"]);
+  assert.deepEqual(ownStudentRows.map((student) => student.matricule).sort(), ["A-001", secondStudent.matricule].sort());
   assert.equal("school_id" in ownStudentRows[0], false);
   assert.equal("password_hash" in ownStudentRows[0], false);
   assert.equal((await request("/api/students?limit=201", { headers: { cookie } })).status, 400);
