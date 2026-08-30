@@ -108,7 +108,7 @@ const handler=async(req,res)=>{
 	        }
 	      }
 	      if(verification.needsRehash){
-	        const upgraded=await authService.hashPassword(password);
+	        const upgraded=await authService.rehashVerifiedPassword(password);
 	        await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2 AND password_hash=$3',[upgraded,u.id,u.password_hash]);
 	      }
 	      await pool.query('DELETE FROM login_attempts WHERE attempt_key=ANY($1::text[])',[Object.values(keys).filter(key=>!key.startsWith('address:'))]);

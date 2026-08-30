@@ -19,6 +19,7 @@ import {
   encryptMfaSecret,
   generateTotpSecret,
   hashPassword,
+  rehashVerifiedPassword,
   recoveryCodeDigest,
   verifyPassword,
   verifyTotp,
@@ -423,5 +424,6 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
     securityEvent,
     verifyPassword,
     hashPassword,
+    rehashVerifiedPassword,
   };
 }

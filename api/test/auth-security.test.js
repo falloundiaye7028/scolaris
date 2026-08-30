@@ -6,6 +6,7 @@ import {
   decryptMfaSecret,
   encryptMfaSecret,
   hashPassword,
+  rehashVerifiedPassword,
   recoveryCodeDigest,
   validateNewPassword,
   verifyPassword,
@@ -23,6 +24,16 @@ test("les nouveaux mots de passe utilisent Argon2id", async () => {
 test("un hash bcrypt valide est marqué pour migration incrémentale", async () => {
   const legacy = await bcrypt.hash("MotDePasse2026!", 10);
   assert.deepEqual(await verifyPassword(legacy, "MotDePasse2026!"), { valid: true, needsRehash: true });
+});
+
+test("un ancien mot de passe déjà vérifié migre vers Argon2id sans appliquer la politique de création", async () => {
+  const legacyPassword = "Ancien1!";
+  assert.throws(() => validateNewPassword(legacyPassword), /weak_password/);
+  const legacy = await bcrypt.hash(legacyPassword, 10);
+  assert.deepEqual(await verifyPassword(legacy, legacyPassword), { valid: true, needsRehash: true });
+  const upgraded = await rehashVerifiedPassword(legacyPassword);
+  assert.match(upgraded, /^\$argon2id\$/);
+  assert.deepEqual(await verifyPassword(upgraded, legacyPassword), { valid: true, needsRehash: false });
 });
 
 test("les secrets MFA sont chiffrés avec authentification", () => {

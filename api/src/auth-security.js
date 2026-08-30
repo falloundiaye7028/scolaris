@@ -22,6 +22,12 @@ export async function hashPassword(password) {
   return argon2.hash(validateNewPassword(password), ARGON2_OPTIONS);
 }
 
+export async function rehashVerifiedPassword(password) {
+  const value = String(password ?? "");
+  if (!value || value.length > 128) throw new Error("invalid_credentials");
+  return argon2.hash(value, ARGON2_OPTIONS);
+}
+
 export async function verifyPassword(storedHash, password) {
   const hash = String(storedHash ?? "");
   const candidate = String(password ?? "");

@@ -51,7 +51,15 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
   const [schoolA, schoolB] = schools.rows.map((row) => row.id);
   await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Direction A','direction-a@example.test',$3,'owner'),($1,'Enseignant A','teacher-a@example.test',$3,'teacher'),($2,'Direction B','direction-b@example.test',$3,'owner')", [schoolA, schoolB, passwordHash]);
+  const weakLegacyPassword = "Ancien1!";
+  const weakLegacyHash = await bcrypt.hash(weakLegacyPassword, 12);
+  await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Compte historique','legacy@example.test',$2,'teacher')", [schoolA, weakLegacyHash]);
   const students = await admin.query("INSERT INTO students(school_id,matricule,first_name,last_name) VALUES($1,'A-001','Awa','A'),($2,'B-001','Binta','B') RETURNING id,school_id", [schoolA, schoolB]);
+
+  const legacyLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "legacy@example.test", password: weakLegacyPassword }) });
+  assert.equal(legacyLogin.status, 200);
+  const migratedLegacyHash = (await admin.query("SELECT password_hash FROM users WHERE email='legacy@example.test'")).rows[0].password_hash;
+  assert.match(migratedLegacyHash, /^\$argon2id\$/);
 
   const invalid = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "absent@example.test", password: "incorrect" }) });
   assert.equal(invalid.status, 401);
