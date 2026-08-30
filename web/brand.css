@@ -1,0 +1,40 @@
+.brand {
+  gap: 9px;
+  font-family: Poppins, Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -.025em;
+}
+
+.brand img {
+  flex: 0 0 auto;
+  border-radius: 12px;
+}
+
+.brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  white-space: nowrap;
+  font-weight: 850;
+}
+
+.brand-scolaris {
+  color: #0d1b3d;
+}
+
+.brand-pay {
+  color: #28a745;
+}
+
+.brand.light .brand-scolaris,
+footer .brand .brand-scolaris {
+  color: #fff;
+}
+
+.brand.light .brand-pay,
+footer .brand .brand-pay {
+  color: #62d25e;
+}
+
+.footer-brand {
+  width: fit-content;
+}

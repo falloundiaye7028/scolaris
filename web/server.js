@@ -20,7 +20,8 @@ const files = {
   "/registration-confirm.js": ["registration-confirm.js", "text/javascript; charset=utf-8"],
   "/parent-login.js": ["parent-login.js", "text/javascript; charset=utf-8"],
   "/security.js": ["security.js", "text/javascript; charset=utf-8"],
-  "/brand.svg": ["brand.svg", "image/svg+xml"],
+  "/brand.css": ["brand.css", "text/css; charset=utf-8"],
+  "/brand-icon.png": ["brand-icon.png", "image/png"],
   "/robots.txt": ["robots.txt", "text/plain; charset=utf-8"],
   "/sitemap.xml": ["sitemap.xml", "application/xml; charset=utf-8"],
 };

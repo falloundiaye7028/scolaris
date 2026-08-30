@@ -204,13 +204,16 @@ test("le portail parent rend les données uniquement avec des nœuds texte", asy
   assert.doesNotMatch(script, /innerHTML|document\.write/);
 });
 
-test("le référencement n'expose aucune route privée et utilise le PNG social attendu", async () => {
-  const [robots, sitemap, index, securityText, image] = await Promise.all([
+test("le référencement n'expose aucune route privée et utilise la nouvelle identité visuelle", async () => {
+  const [robots, sitemap, index, securityText, image, brandIcon, brandCss, privateHtml] = await Promise.all([
     readFile(new URL("../../web/robots.txt", import.meta.url), "utf8"),
     readFile(new URL("../../web/sitemap.xml", import.meta.url), "utf8"),
     readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../../web/.well-known/security.txt", import.meta.url), "utf8"),
     readFile(new URL("../../web/og-scolaris-pay.png", import.meta.url)),
+    readFile(new URL("../../web/brand-icon.png", import.meta.url)),
+    readFile(new URL("../../web/brand.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/private-app.html", import.meta.url), "utf8"),
   ]);
   assert.match(robots, /Disallow: \/app/);
   assert.match(robots, /Disallow: \/admin/);
@@ -219,9 +222,38 @@ test("le référencement n'expose aucune route privée et utilise le PNG social 
   assert.doesNotMatch(sitemap, /connexion|\/app|\/admin|\/api\//);
   assert.match(index, /twitter:card[^>]+summary_large_image/);
   assert.match(index, /og-scolaris-pay\.png/);
+  assert.match(index, /href="\/brand-icon\.png" type="image\/png"/);
+  assert.match(index, /href="\/brand\.css"/);
+  assert.match(privateHtml, /src="\/brand-icon\.png"/);
+  assert.doesNotMatch(index + privateHtml, /brand\.svg/);
+  assert.match(brandCss, /#0d1b3d/i);
+  assert.match(brandCss, /#28a745/i);
   assert.equal(image.readUInt32BE(16), 1200);
   assert.equal(image.readUInt32BE(20), 630);
+  assert.equal(brandIcon.readUInt32BE(16), 260);
+  assert.equal(brandIcon.readUInt32BE(20), 260);
   assert.match(securityText, /^Contact:/m);
   assert.match(securityText, /^Expires:/m);
   assert.match(securityText, /^Canonical:/m);
+});
+
+test("toutes les pages publiques utilisent le nouveau logo et son favicon", async () => {
+  const pages = [
+    "index.html",
+    "connexion.html",
+    "inscription-ecole.html",
+    "confirmer-inscription.html",
+    "connexion-parent.html",
+    "confidentialite.html",
+    "mentions-legales.html",
+    "conditions-utilisation.html",
+    "protection-donnees.html",
+  ];
+  for (const page of pages) {
+    const html = await readFile(new URL(`../../web/${page}`, import.meta.url), "utf8");
+    assert.match(html, /href="\/brand-icon\.png" type="image\/png"/);
+    assert.match(html, /rel="apple-touch-icon" href="\/brand-icon\.png"/);
+    assert.match(html, /href="\/brand\.css"/);
+    assert.doesNotMatch(html, /brand\.svg/);
+  }
 });
