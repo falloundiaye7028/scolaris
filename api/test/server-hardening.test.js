@@ -30,6 +30,7 @@ test("les routes privées ne sont ni publiques, ni indexables, ni mises en cache
   const appHeaders = vercel.headers.find((entry) => entry.source === "/app");
   assert.equal(vercel.outputDirectory, "web");
   assert.equal(appRewrite?.destination, "/api/private/app");
+  assert.match(server, /\['\/app','\/api\/private\/app'\]\.includes\(url\.pathname\)/);
   assert.match(JSON.stringify(appHeaders), /noindex, nofollow, noarchive/);
   assert.match(JSON.stringify(appHeaders), /private, no-store/);
 });

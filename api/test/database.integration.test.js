@@ -30,6 +30,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const request = async (path, options = {}) => fetch(`${baseUrl}${path}`, { ...options, headers: { origin: baseUrl, "x-forwarded-proto": "http", ...(options.headers || {}) } });
 
   await request("/api/health");
+  assert.equal((await request("/app")).status, 401);
   const passwordHash = await bcrypt.hash("MotDePasse#2026", 12);
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
   const [schoolA, schoolB] = schools.rows.map((row) => row.id);
@@ -49,6 +50,11 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal(login.status, 200);
   const cookie = login.headers.get("set-cookie").split(";")[0];
   assert.ok(cookie.startsWith("scolaris_session="));
+
+  const privateApp = await request("/app", { headers: { cookie } });
+  assert.equal(privateApp.status, 200);
+  assert.match(privateApp.headers.get("content-type"), /^text\/html/);
+  assert.match(await privateApp.text(), /SCOLARIS PAY/);
 
   const ownStudents = await request("/api/students", { headers: { cookie } });
   assert.equal(ownStudents.status, 200);
