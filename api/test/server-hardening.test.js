@@ -30,6 +30,7 @@ test("le super-administrateur est explicite et les relations tenant sont vérifi
 test("les routes privées ne sont ni publiques, ni indexables, ni mises en cache", () => {
   const appRewrite = vercel.rewrites.find((entry) => entry.source === "/app");
   const appHeaders = vercel.headers.find((entry) => entry.source === "/app");
+  assert.equal(vercel.installCommand, "npm ci --prefix api");
   assert.equal(vercel.outputDirectory, "web");
   assert.equal(appRewrite?.destination, "/api/private/app");
   assert.match(server, /\['\/app','\/api\/private\/app'\]\.includes\(url\.pathname\)/);
