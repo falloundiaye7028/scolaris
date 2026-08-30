@@ -6,14 +6,25 @@
     "confirmedOn": "2026-08-30",
     "basis": "Confirmation explicite du responsable du projet que les obligations juridiques et CDP applicables sont respectées. Les justificatifs restent conservés hors du dépôt."
   },
+  "verifiedInformation": {
+    "editor": {
+      "identity": "Mamadou Falilou Ndiaye",
+      "legalForm": "Entreprise individuelle",
+      "officialAddress": "Touba Mosquée, Touba, Sénégal",
+      "ninea": "007317151",
+      "rccm": "SN.DBL.2019.A.1170",
+      "source": "Avis d'immatriculation NINEA et formulaires RCCM fournis par le responsable du projet, conservés hors du dépôt",
+      "verifiedOn": "2026-08-30"
+    },
+    "publicationManager": "Mamadou Falilou Ndiaye",
+    "hostingProvider": {
+      "name": "Vercel Inc.",
+      "address": "440 N Barranca Avenue #4133, Covina, CA 91723, États-Unis",
+      "source": "https://vercel.com/legal/privacy-notice",
+      "verifiedOn": "2026-08-30"
+    }
+  },
   "requiredInformation": [
-    "raison_sociale_ou_identite_editeur",
-    "forme_juridique",
-    "adresse_officielle",
-    "ninea",
-    "rccm",
-    "responsable_publication",
-    "hebergeur",
     "responsable_traitement",
     "durees_conservation",
     "fondements_juridiques",

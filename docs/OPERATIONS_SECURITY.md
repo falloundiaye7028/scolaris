@@ -2,7 +2,7 @@
 
 ## Blocages avant données réelles
 
-La mise en production commerciale avec des données réelles reste bloquée tant que les informations de `config/legal-requirements.json`, les contrats de sous-traitance et les obligations applicables auprès de la CDP sénégalaise ne sont pas validés par les responsables compétents.
+La mise en production commerciale avec des données réelles n'est autorisée qu'après validation des informations de `config/legal-requirements.json`, des contrats de sous-traitance et des obligations applicables auprès de la CDP sénégalaise par les responsables compétents. L'état et la base de la validation courante sont consignés dans ce fichier de configuration ; les justificatifs restent conservés hors du dépôt.
 
 Les environnements Vercel Preview et Production doivent utiliser des bases PostgreSQL différentes. Une préversion ne doit jamais exécuter de migration, de test de connexion ou de parcours métier sur la base de production.
 
