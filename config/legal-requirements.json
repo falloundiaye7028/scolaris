@@ -1,6 +1,11 @@
 {
-  "commercialProductionBlocked": true,
-  "blockReason": "Les informations juridiques officielles et les obligations applicables auprès de la CDP sénégalaise doivent être validées avant toute utilisation commerciale avec des données réelles.",
+  "commercialProductionBlocked": false,
+  "blockReason": null,
+  "validation": {
+    "status": "confirmed_by_project_owner",
+    "confirmedOn": "2026-08-30",
+    "basis": "Confirmation explicite du responsable du projet que les obligations juridiques et CDP applicables sont respectées. Les justificatifs restent conservés hors du dépôt."
+  },
   "requiredInformation": [
     "raison_sociale_ou_identite_editeur",
     "forme_juridique",
