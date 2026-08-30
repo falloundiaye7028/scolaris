@@ -51,6 +51,7 @@ const ensureSchema = () => schemaReady ||= readFile(new URL('./schema.sql', impo
 const authService = createAuthService({pool,secret,production,mfaEncryptionKey:process.env.MFA_ENCRYPTION_KEY,mfaIssuer:process.env.MFA_ISSUER || 'SCOLARIS PAY',passwordResetWebhookUrl:process.env.PASSWORD_RESET_WEBHOOK_URL,passwordResetWebhookSecret:process.env.PASSWORD_RESET_WEBHOOK_SECRET});
 const registrationWebhookUrl=process.env.SCHOOL_REGISTRATION_WEBHOOK_URL||'';
 const registrationWebhookSecret=process.env.SCHOOL_REGISTRATION_WEBHOOK_SECRET||'';
+const registrationAvailable=!production||Boolean(registrationWebhookUrl);
 const notificationWebhookUrl=process.env.SCHOOL_NOTIFICATION_WEBHOOK_URL||'';
 const notificationWebhookSecret=process.env.SCHOOL_NOTIFICATION_WEBHOOK_SECRET||'';
 const commonHeaders = {'strict-transport-security':'max-age=63072000; includeSubDomains; preload','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cache-control':'no-store, private, max-age=0','pragma':'no-cache','permissions-policy':'camera=(), microphone=(), geolocation=()','cross-origin-opener-policy':'same-origin','cross-origin-resource-policy':'same-origin','x-frame-options':'DENY','x-robots-tag':'noindex, nofollow, noarchive'};
@@ -100,8 +101,9 @@ const handler=async(req,res)=>{
       return json(res,204,{}, {'allow':'GET, HEAD, POST, PUT, DELETE, OPTIONS'});
     }
     if(route(req.method,url.pathname)==='GET /api/health') { await pool.query('SELECT 1'); return json(res,200,{status:'ok',service:'scolaris-api'}); }
-    if(route(req.method,url.pathname)==='GET /api/public/registration-challenge') return json(res,200,{challenge:challengeFor(req),minimumDelayMs:1500});
+    if(route(req.method,url.pathname)==='GET /api/public/registration-challenge') return json(res,200,{available:registrationAvailable,challenge:registrationAvailable?challengeFor(req):null,minimumDelayMs:1500});
     if(route(req.method,url.pathname)==='POST /api/public/school-registrations') {
+      if(!registrationAvailable)return json(res,503,{error:'Les inscriptions sont temporairement indisponibles. Contactez SCOLARIS PAY.'},{'retry-after':'3600'});
       const b=await body(req),responsibleEmail=emailAddress(b.responsibleEmail),professionalEmail=emailAddress(b.professionalEmail),keys=registrationAttemptKeys(req,responsibleEmail),message=registrationMessage();
       if(!await registrationAllowed(keys))return json(res,429,{message},{'retry-after':'86400'});
       await registerRegistrationAttempt(keys);

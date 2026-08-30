@@ -122,6 +122,7 @@ test("l'inscription publique annonce le prix fixe sans proposer de paiement en l
   assert.match(registration, /50[\s  ]*000 FCFA/i);
   assert.match(registration, /conditions|confidentialité/i);
   assert.match(registrationScript, /registration-challenge/);
+  assert.match(registrationScript, /data\.available === false/);
   assert.match(registration + registrationScript, /school-registrations/);
   assert.doesNotMatch(home + registration + registrationScript, /Stripe|PayPal|checkout|paymentIntent/i);
 });

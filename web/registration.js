@@ -7,6 +7,10 @@ const challengeField = document.getElementById("registrationChallenge");
 async function refreshChallenge() {
   const response = await fetch("/api/public/registration-challenge", { credentials: "same-origin", headers: { accept: "application/json" } });
   const data = await response.json();
+  if (response.ok && data.available === false) {
+    registrationButton.disabled = true;
+    throw new Error("Les inscriptions sont temporairement indisponibles. Contactez SCOLARIS PAY.");
+  }
   if (!response.ok || !data.challenge) throw new Error("Le contrôle de sécurité est indisponible. Réessayez plus tard.");
   challengeField.value = data.challenge;
 }
@@ -43,7 +47,7 @@ registrationForm.addEventListener("submit", async (event) => {
     registrationStatus.textContent = error instanceof Error ? error.message : "Inscription impossible. Réessayez plus tard.";
     await refreshChallenge().catch(() => {});
   } finally {
-    registrationButton.disabled = false;
+    registrationButton.disabled = !challengeField.value;
     registrationButton.removeAttribute("aria-busy");
   }
 });
