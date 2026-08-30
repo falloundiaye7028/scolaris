@@ -27,3 +27,24 @@ test("la limitation de connexion est persistée en base", () => {
   assert.match(schema, /CREATE TABLE IF NOT EXISTS login_attempts/);
   assert.match(schema, /locked_until timestamptz/);
 });
+
+test("les inscriptions et abonnements des établissements ont un modèle dédié", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS school_email_confirmations/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS registration_attempts/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS school_subscriptions/);
+  assert.match(schema, /monthly_price_xof integer NOT NULL DEFAULT 50000 CHECK\(monthly_price_xof=50000\)/);
+  assert.match(schema, /billing_cycle text NOT NULL DEFAULT 'monthly' CHECK\(billing_cycle='monthly'\)/);
+  assert.match(schema, /grace_period_end timestamptz/);
+  assert.doesNotMatch(schema, /UPDATE users SET is_platform_admin=true/);
+});
+
+test("les règlements plateforme restent physiquement séparés des paiements scolaires", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS platform_subscription_payments/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS platform_payment_proofs/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS subscription_notifications/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS payments/);
+  assert.match(schema, /CREATE OR REPLACE VIEW student_fee_payments/);
+  assert.match(schema, /amount_expected_xof integer NOT NULL CHECK\(amount_expected_xof=50000\)/);
+  assert.match(schema, /cancellation_reason text/);
+  assert.doesNotMatch(schema, /ON DELETE CASCADE[\s\S]{0,80}platform_subscription_payments/);
+});

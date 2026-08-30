@@ -27,6 +27,18 @@ test("le super-administrateur est explicite et les relations tenant sont vérifi
   assert.match(server, /WHERE id=\$1 AND school_id=\$2 FOR UPDATE/);
 });
 
+test("l'abonnement plateforme est administré uniquement par les routes privilégiées", () => {
+  assert.match(server, /requirePlatformSecurity\(me\)/);
+  assert.match(server, /POST \/api\/platform\/subscription-payments\/preview/);
+  assert.match(server, /POST \/api\/platform\/subscription-payments/);
+  assert.match(server, /amount_received_xof/);
+  assert.match(server, /platform_subscription_payment\.confirmed/);
+  assert.match(server, /platform_subscription_payment\.cancelled/);
+  assert.match(server, /GET \/api\/school\/subscription/);
+  assert.match(server, /student_fee_payments/);
+  assert.doesNotMatch(server, /stripe|paypal|checkout\.sessions|paymentIntent/i);
+});
+
 test("les routes privées ne sont ni publiques, ni indexables, ni mises en cache", () => {
   const appRewrite = vercel.rewrites.find((entry) => entry.source === "/app");
   const appHeaders = vercel.headers.find((entry) => entry.source === "/app");

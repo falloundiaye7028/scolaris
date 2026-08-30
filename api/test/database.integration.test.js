@@ -25,6 +25,8 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   process.env.JWT_SECRET = "integration-test-secret-at-least-32-characters";
   process.env.MFA_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
   process.env.MFA_ENFORCEMENT = "off";
+  process.env.CRON_SECRET = "integration-cron-secret";
+  process.env.SCHOOL_REGISTRATION_WEBHOOK_URL = "https://registration-webhook.test/confirm";
   process.env.VERCEL = "1";
   process.env.VERCEL_ENV = "preview";
   const [{ default: handler, closeDatabase }, { default: pg }, { default: bcrypt }] = await Promise.all([
@@ -43,7 +45,17 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   context.after(() => new Promise((resolve) => server.close(resolve)));
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
-  const request = async (path, options = {}) => fetch(`${baseUrl}${path}`, { ...options, headers: { origin: baseUrl, "x-forwarded-proto": "http", ...(options.headers || {}) } });
+  const originalFetch = globalThis.fetch;
+  const registrationNotifications = [];
+  globalThis.fetch = async (input, options = {}) => {
+    if (String(input) === process.env.SCHOOL_REGISTRATION_WEBHOOK_URL) {
+      registrationNotifications.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ accepted: true }), { status: 202, headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, options);
+  };
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const request = async (path, options = {}) => originalFetch(`${baseUrl}${path}`, { ...options, headers: { origin: baseUrl, "x-forwarded-proto": "http", ...(options.headers || {}) } });
 
   await request("/api/health");
   assert.equal((await request("/app")).status, 401);
@@ -51,6 +63,9 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
   const [schoolA, schoolB] = schools.rows.map((row) => row.id);
   await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Direction A','direction-a@example.test',$3,'owner'),($1,'Enseignant A','teacher-a@example.test',$3,'teacher'),($2,'Direction B','direction-b@example.test',$3,'owner')", [schoolA, schoolB, passwordHash]);
+  const platformSchool = (await admin.query("INSERT INTO schools(name,slug,subscription_status,professional_email,email_verified_at) VALUES('Administration SCOLARIS','administration-scolaris','active','platform@example.test',now()) RETURNING id")).rows[0].id;
+  await admin.query("INSERT INTO users(school_id,name,email,password_hash,role,is_platform_admin,email_verified_at) VALUES($1,'Administrateur plateforme','platform@example.test',$2,'owner',true,now())", [platformSchool, passwordHash]);
+  await admin.query("INSERT INTO school_subscriptions(school_id,status,is_exempt,started_at,current_period_start,current_period_end,paid_until,grace_period_end) VALUES($1,'active',false,now(),now(),now()+interval '30 days',now()+interval '30 days',now()+interval '37 days'),($2,'active',false,now(),now(),now()+interval '30 days',now()+interval '30 days',now()+interval '37 days'),($3,'active',true,now(),now(),now()+interval '100 years',now()+interval '100 years',now()+interval '100 years')", [schoolA, schoolB, platformSchool]);
   const weakLegacyPassword = "Ancien1!";
   const weakLegacyHash = await bcrypt.hash(weakLegacyPassword, 12);
   await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Compte historique','legacy@example.test',$2,'teacher')", [schoolA, weakLegacyHash]);
@@ -126,6 +141,127 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const schoolBStudent = students.rows.find((row) => row.school_id === schoolB).id;
   const crossTenant = await request(`/api/students/${schoolBStudent}`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ matricule: "B-001", firstName: "Intrus", lastName: "Test" }) });
   assert.equal(crossTenant.status, 404);
+
+  const platformHeaders = { "content-type": "application/json", "user-agent": "Platform Integration Test" };
+  const platformLogin = await request("/api/auth/login", { method: "POST", headers: platformHeaders, body: JSON.stringify({ email: "platform@example.test", password: "MotDePasse#2026" }) });
+  assert.equal(platformLogin.status, 200);
+  const platformCookie = platformLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/platform/clients", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test" } })).status, 428);
+  const platformMfaSetup = await request("/api/auth/mfa/setup", { method: "POST", headers: { ...platformHeaders, cookie: platformCookie }, body: "{}" });
+  assert.equal(platformMfaSetup.status, 200);
+  const platformMfaSecret = new URL((await platformMfaSetup.json()).provisioningUri).searchParams.get("secret");
+  const platformMfaConfirm = await request("/api/auth/mfa/confirm", { method: "POST", headers: { ...platformHeaders, cookie: platformCookie }, body: JSON.stringify({ code: totp(platformMfaSecret) }) });
+  assert.equal(platformMfaConfirm.status, 200);
+
+  const registrationChallengeResponse = await request("/api/public/registration-challenge");
+  assert.equal(registrationChallengeResponse.status, 200);
+  const registrationChallenge = (await registrationChallengeResponse.json()).challenge;
+  await new Promise((resolve) => setTimeout(resolve, 1_550));
+  const registrationPayload = {
+    challenge: registrationChallenge,
+    website: "",
+    schoolName: "École Inscription Test",
+    schoolType: "private",
+    country: "Sénégal",
+    city: "Dakar",
+    address: "10 avenue des Écoles",
+    schoolPhone: "+221 77 111 22 33",
+    professionalEmail: "contact-inscription@example.test",
+    approximateStudentCount: 350,
+    ninea: "009999999",
+    rccm: "SN.DKR.2026.A.9999",
+    firstName: "Aminata",
+    lastName: "Sarr",
+    representativeTitle: "Directrice",
+    representativePhone: "+221 76 444 55 66",
+    responsibleEmail: "direction-inscription@example.test",
+    password: "MotDePasseInscription2026!",
+    passwordConfirmation: "MotDePasseInscription2026!",
+    acceptTerms: true,
+    acknowledgePrivacy: true,
+    confirmRepresentation: true,
+  };
+  const registration = await request("/api/public/school-registrations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(registrationPayload) });
+  assert.equal(registration.status, 202);
+  assert.doesNotMatch((await registration.json()).message, /créé|existe|doublon/i);
+  const duplicateRegistration = await request("/api/public/school-registrations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(registrationPayload) });
+  assert.equal(duplicateRegistration.status, 202);
+  assert.equal((await admin.query("SELECT count(*)::int total FROM users WHERE email='direction-inscription@example.test'")).rows[0].total, 1);
+  const invalidRegistration = await request("/api/public/school-registrations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...registrationPayload, schoolName: "École Invalide", professionalEmail: "invalide-pro@example.test", responsibleEmail: "invalide@example.test", schoolPhone: "123" }) });
+  assert.equal(invalidRegistration.status, 400);
+  const confirmationNotification = registrationNotifications.find((item) => item.event === "registration.confirmation");
+  assert.ok(confirmationNotification?.confirmationUrl);
+  const confirmationUrl = new URL(confirmationNotification.confirmationUrl);
+  const confirmationToken = new URLSearchParams(confirmationUrl.hash.slice(1)).get("token");
+  const confirmation = await request("/api/public/school-registration/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: confirmationToken }) });
+  assert.equal(confirmation.status, 200);
+  assert.equal((await request("/api/public/school-registration/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: confirmationToken }) })).status, 400);
+  const registeredSchool = (await admin.query("SELECT id,subscription_status,email_verified_at FROM schools WHERE professional_email='contact-inscription@example.test'")).rows[0];
+  assert.equal(registeredSchool.subscription_status, "pending_review");
+  assert.ok(registeredSchool.email_verified_at);
+  assert.equal((await admin.query("SELECT count(*)::int total FROM users WHERE school_id=$1", [registeredSchool.id])).rows[0].total, 1);
+
+  const pendingLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "Registered School Test" }, body: JSON.stringify({ email: "direction-inscription@example.test", password: registrationPayload.password }) });
+  assert.equal(pendingLogin.status, 200);
+  const registeredCookie = pendingLogin.headers.get("set-cookie").split(";")[0];
+  const pendingSubscription = await request("/api/school/subscription", { headers: { cookie: registeredCookie, "user-agent": "Registered School Test" } });
+  assert.equal(pendingSubscription.status, 200);
+  assert.equal((await pendingSubscription.json()).monthlyPriceXof, 50_000);
+  assert.equal((await request("/api/students", { headers: { cookie: registeredCookie, "user-agent": "Registered School Test" } })).status, 403);
+  const registrationUpdate = await request("/api/school/registration", { method: "PUT", headers: { cookie: registeredCookie, "user-agent": "Registered School Test", "content-type": "application/json" }, body: JSON.stringify({ schoolType: "private", country: "Sénégal", city: "Rufisque", address: "10 avenue des Écoles", schoolPhone: "+221771112233", approximateStudentCount: 360, ninea: "009999999", rccm: "SN.DKR.2026.A.9999", representativeTitle: "Directrice", representativePhone: "+221764445566" }) });
+  assert.equal(registrationUpdate.status, 200);
+  assert.equal((await admin.query("SELECT city FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].city, "Rufisque");
+
+  const platformAuthHeaders = { ...platformHeaders, cookie: platformCookie };
+  const approve = await request(`/api/platform/clients/${registeredSchool.id}/review`, { method: "PUT", headers: platformAuthHeaders, body: JSON.stringify({ action: "approve" }) });
+  assert.equal(approve.status, 200);
+  const preview = await request("/api/platform/subscription-payments/preview", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountExpectedXof: 1, amountReceivedXof: 50_000, paymentMethod: "wave", paidAt: "2026-08-30" }) });
+  assert.equal(preview.status, 200);
+  assert.equal((await preview.json()).amountExpectedXof, 50_000);
+  const underpayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountReceivedXof: 49_999, paymentMethod: "wave", paidAt: "2026-08-30" }) });
+  assert.equal(underpayment.status, 400);
+  const firstSubscriptionPayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountExpectedXof: 1, amountReceivedXof: 50_000, paymentMethod: "wave", externalReference: "ABN-TEST-001", paidAt: "2026-08-30", proof: { name: "preuve.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4\n% test\n").toString("base64") } }) });
+  assert.equal(firstSubscriptionPayment.status, 201);
+  const firstPayment = await firstSubscriptionPayment.json();
+  assert.equal(Number(firstPayment.amount_expected_xof), 50_000);
+  assert.equal((await request("/api/students", { headers: { cookie: registeredCookie, "user-agent": "Registered School Test" } })).status, 200);
+  assert.equal((await request("/api/platform/subscription-payments", { method: "POST", headers: { ...platformHeaders, cookie: registeredCookie, "user-agent": "Registered School Test" }, body: JSON.stringify({ schoolId: registeredSchool.id, amountReceivedXof: 50_000, paymentMethod: "cash" }) })).status, 403);
+
+  const secondSubscriptionPayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountReceivedXof: 50_000, paymentMethod: "cash", externalReference: "ABN-TEST-002", paidAt: "2026-08-30" }) });
+  assert.equal(secondSubscriptionPayment.status, 201);
+  const secondPayment = await secondSubscriptionPayment.json();
+  assert.equal(new Date(secondPayment.payment_period_start).getTime(), new Date(firstPayment.payment_period_end).getTime() + 1);
+  const periodPayments = await request("/api/platform/subscription-payments?from=2026-08-01&to=2026-09-01", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test" } });
+  assert.equal(periodPayments.status, 200);
+  assert.ok((await periodPayments.json()).length >= 2);
+  assert.equal((await request("/api/platform/subscription-payments?from=2026-09-01&to=2026-08-01", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test" } })).status, 400);
+  assert.equal((await request(`/api/platform/clients/${registeredSchool.id}/subscription`, { method: "PUT", headers: platformAuthHeaders, body: JSON.stringify({ action: "suspend" }) })).status, 200);
+  assert.equal((await request(`/api/platform/clients/${registeredSchool.id}/subscription`, { method: "PUT", headers: platformAuthHeaders, body: JSON.stringify({ action: "reactivate" }) })).status, 200);
+
+  await admin.query("UPDATE school_subscriptions SET status='active',paid_until=now()+interval '2 days',grace_period_end=now()+interval '9 days' WHERE school_id=$1", [schoolA]);
+  await admin.query("UPDATE school_subscriptions SET status='active',paid_until=now()-interval '1 day',grace_period_end=now()+interval '6 days' WHERE school_id=$1", [registeredSchool.id]);
+  await admin.query("UPDATE schools SET subscription_status='active' WHERE id=$1", [registeredSchool.id]);
+  assert.equal((await request("/api/cron/subscriptions", { headers: { authorization: "Bearer integration-cron-secret" } })).status, 200);
+  assert.equal((await admin.query("SELECT count(*)::int total FROM subscription_notifications WHERE school_id=$1 AND event_type='expiry_reminder'", [schoolA])).rows[0].total, 1);
+  assert.equal((await admin.query("SELECT subscription_status FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].subscription_status, "grace_period");
+  assert.equal((await request("/api/students", { method: "POST", headers: { cookie: registeredCookie, "user-agent": "Registered School Test", "content-type": "application/json" }, body: JSON.stringify({ firstName: "Lecture", lastName: "Seule" }) })).status, 403);
+  await admin.query("UPDATE school_subscriptions SET grace_period_end=now()+interval '1 day' WHERE school_id=$1", [registeredSchool.id]);
+  assert.equal((await request("/api/cron/subscriptions", { headers: { authorization: "Bearer integration-cron-secret" } })).status, 200);
+  assert.equal((await admin.query("SELECT count(*)::int total FROM subscription_notifications WHERE school_id=$1 AND event_type='suspension_warning'", [registeredSchool.id])).rows[0].total, 1);
+  await admin.query("UPDATE school_subscriptions SET grace_period_end=now()-interval '1 second' WHERE school_id=$1", [registeredSchool.id]);
+  assert.equal((await request("/api/cron/subscriptions", { headers: { authorization: "Bearer integration-cron-secret" } })).status, 200);
+  assert.equal((await admin.query("SELECT subscription_status FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].subscription_status, "suspended");
+  assert.equal((await request("/api/students", { headers: { cookie: registeredCookie, "user-agent": "Registered School Test" } })).status, 200);
+  assert.equal((await request("/api/exports/students.csv", { headers: { cookie: registeredCookie, "user-agent": "Registered School Test" } })).status, 403);
+
+  const restorationPayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountReceivedXof: 50_000, paymentMethod: "bank_transfer", externalReference: "ABN-TEST-003", paidAt: "2026-08-30" }) });
+  assert.equal(restorationPayment.status, 201);
+  const restoration = await restorationPayment.json();
+  assert.equal((await admin.query("SELECT subscription_status FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].subscription_status, "active");
+  const cancelPayment = await request(`/api/platform/subscription-payments/${restoration.id}/cancel`, { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ reason: "Erreur de saisie constatée lors du contrôle" }) });
+  assert.equal(cancelPayment.status, 200);
+  assert.equal((await admin.query("SELECT status FROM platform_subscription_payments WHERE id=$1", [restoration.id])).rows[0].status, "cancelled");
+  assert.ok(Number((await admin.query("SELECT count(*) total FROM audit_logs WHERE action IN ('school.approved','platform_subscription_payment.confirmed','platform_subscription_payment.cancelled') AND metadata->>'clientSchoolId'=$1::text OR entity_id=$1", [registeredSchool.id])).rows[0].total) >= 1);
 
   const csrf = await request("/api/students", { method: "POST", headers: { cookie, origin: "https://evil.example", "content-type": "application/json" }, body: JSON.stringify({ firstName: "CSRF", lastName: "Refusé" }) });
   assert.equal(csrf.status, 403);

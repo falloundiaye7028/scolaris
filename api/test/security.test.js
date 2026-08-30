@@ -111,6 +111,21 @@ test("le HTML public ne contient aucune interface ou donnée privée", async () 
   assert.match(privateHtml, /noindex,nofollow,noarchive/);
 });
 
+test("l'inscription publique annonce le prix fixe sans proposer de paiement en ligne", async () => {
+  const [home, registration, registrationScript] = await Promise.all([
+    readFile(new URL("../../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../../web/inscription-ecole.html", import.meta.url), "utf8"),
+    readFile(new URL("../../web/registration.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(home, /50[\s  ]*000 FCFA/i);
+  assert.match(home, /aucun paiement en ligne/i);
+  assert.match(registration, /50[\s  ]*000 FCFA/i);
+  assert.match(registration, /conditions|confidentialité/i);
+  assert.match(registrationScript, /registration-challenge/);
+  assert.match(registration + registrationScript, /school-registrations/);
+  assert.doesNotMatch(home + registration + registrationScript, /Stripe|PayPal|checkout|paymentIntent/i);
+});
+
 test("l'application privée n'utilise plus d'attribut d'événement inline et sa CSP verrouille le script", async () => {
   const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
   const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");

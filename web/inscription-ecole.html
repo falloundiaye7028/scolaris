@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Inscrire mon établissement — SCOLARIS PAY</title>
+  <meta name="description" content="Créez la demande d’inscription de votre établissement à SCOLARIS PAY.">
+  <link rel="canonical" href="https://www.scolarispay.online/inscription-ecole">
+  <link rel="icon" href="/brand.svg" type="image/svg+xml"><link rel="stylesheet" href="/public.css"><script src="/registration.js" defer></script>
+</head>
+<body class="registration-page">
+  <a class="skip-link" href="#registrationForm">Aller au formulaire</a>
+  <header class="site-header"><a class="brand" href="/"><img src="/brand.svg" alt="" width="42" height="42"><span>SCOLARIS PAY</span></a><nav><a href="/connexion">Se connecter</a><a class="button small" href="/">Retour au site</a></nav></header>
+  <main class="registration-layout">
+    <section class="registration-intro"><p class="eyebrow">Inscription établissement</p><h1>Créez votre espace scolaire.</h1><p>Votre e-mail sera d’abord confirmé. L’équipe SCOLARIS PAY vérifiera ensuite la demande avant l’activation de l’abonnement.</p><div class="price-note"><strong>50 000 FCFA</strong><span>par mois et par établissement</span></div><ol><li>Confirmation de l’e-mail</li><li>Vérification de l’établissement</li><li>Enregistrement du règlement reçu hors plateforme</li><li>Activation de l’espace</li></ol></section>
+    <section class="registration-card">
+      <form id="registrationForm" method="post" action="/api/public/school-registrations">
+        <input type="hidden" name="challenge" id="registrationChallenge">
+        <div class="bot-field" aria-hidden="true"><label for="website">Site internet</label><input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+        <fieldset><legend>Informations sur l’établissement</legend><div class="form-grid">
+          <div class="field span-2"><label for="schoolName">Nom officiel de l’établissement</label><input id="schoolName" name="schoolName" required minlength="2" maxlength="180" autocomplete="organization"></div>
+          <div class="field"><label for="schoolType">Type d’établissement</label><select id="schoolType" name="schoolType" required><option value="">Sélectionner</option><option value="public">Public</option><option value="private">Privé</option><option value="community">Communautaire</option><option value="religious">Confessionnel</option><option value="vocational">Formation professionnelle</option><option value="higher_education">Enseignement supérieur</option><option value="other">Autre</option></select></div>
+          <div class="field"><label for="country">Pays</label><input id="country" name="country" required minlength="2" maxlength="80" autocomplete="country-name" value="Sénégal"></div>
+          <div class="field"><label for="city">Ville</label><input id="city" name="city" required minlength="2" maxlength="120" autocomplete="address-level2"></div>
+          <div class="field"><label for="schoolPhone">Téléphone</label><input id="schoolPhone" name="schoolPhone" required type="tel" maxlength="30" autocomplete="tel"></div>
+          <div class="field span-2"><label for="address">Adresse</label><input id="address" name="address" required minlength="4" maxlength="240" autocomplete="street-address"></div>
+          <div class="field"><label for="professionalEmail">E-mail professionnel</label><input id="professionalEmail" name="professionalEmail" required type="email" maxlength="254" autocomplete="email"></div>
+          <div class="field"><label for="approximateStudentCount">Nombre approximatif d’élèves</label><input id="approximateStudentCount" name="approximateStudentCount" required type="number" min="1" max="200000" step="1"></div>
+          <div class="field"><label for="ninea">NINEA <small>(facultatif)</small></label><input id="ninea" name="ninea" maxlength="80"></div>
+          <div class="field"><label for="rccm">RCCM <small>(facultatif)</small></label><input id="rccm" name="rccm" maxlength="100"></div>
+        </div></fieldset>
+        <fieldset><legend>Responsable de l’établissement</legend><div class="form-grid">
+          <div class="field"><label for="firstName">Prénom</label><input id="firstName" name="firstName" required maxlength="100" autocomplete="given-name"></div>
+          <div class="field"><label for="lastName">Nom</label><input id="lastName" name="lastName" required maxlength="100" autocomplete="family-name"></div>
+          <div class="field"><label for="representativeTitle">Fonction</label><input id="representativeTitle" name="representativeTitle" required minlength="2" maxlength="120" autocomplete="organization-title"></div>
+          <div class="field"><label for="representativePhone">Téléphone</label><input id="representativePhone" name="representativePhone" required type="tel" maxlength="30" autocomplete="tel"></div>
+          <div class="field span-2"><label for="responsibleEmail">Adresse e-mail de connexion</label><input id="responsibleEmail" name="responsibleEmail" required type="email" maxlength="254" autocomplete="email"></div>
+          <div class="field"><label for="registrationPassword">Mot de passe</label><input id="registrationPassword" name="password" required type="password" minlength="12" maxlength="128" autocomplete="new-password" aria-describedby="passwordHelp"></div>
+          <div class="field"><label for="passwordConfirmation">Confirmer le mot de passe</label><input id="passwordConfirmation" name="passwordConfirmation" required type="password" minlength="12" maxlength="128" autocomplete="new-password"></div>
+          <p id="passwordHelp" class="field-help span-2">Au moins 12 caractères avec des lettres et un chiffre.</p>
+        </div></fieldset>
+        <fieldset><legend>Consentements obligatoires</legend><div class="consents">
+          <label><input type="checkbox" name="acceptTerms" required> J’accepte les <a href="/conditions-utilisation" target="_blank" rel="noopener">conditions d’utilisation</a>.</label>
+          <label><input type="checkbox" name="acknowledgePrivacy" required> Je reconnais avoir lu la <a href="/confidentialite" target="_blank" rel="noopener">politique de confidentialité</a>.</label>
+          <label><input type="checkbox" name="confirmRepresentation" required> Je confirme être autorisé à représenter cet établissement.</label>
+        </div></fieldset>
+        <button id="registrationButton" class="button full" type="submit">Créer mon établissement</button><p id="registrationStatus" class="form-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

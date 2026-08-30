@@ -8,6 +8,25 @@ ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_status text NOT NULL D
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS subscription_due_date date;
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS suspended_at timestamptz;
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS deletion_requested_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS school_type text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS country text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS city text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS phone text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS professional_email text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS approximate_student_count integer;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS ninea text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS rccm text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS representative_title text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS representative_phone text;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS privacy_acknowledged_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS representation_confirmed_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS reviewed_by uuid;
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS rejection_reason text;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_schools_professional_email ON schools(lower(professional_email)) WHERE professional_email IS NOT NULL;
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   name text NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL,
@@ -17,9 +36,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_platform_admin boolean NOT NULL DE
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz NOT NULL DEFAULT now();
-UPDATE users SET is_platform_admin=true
-WHERE id=(SELECT id FROM users ORDER BY created_at,id LIMIT 1)
-  AND NOT EXISTS(SELECT 1 FROM users WHERE is_platform_admin=true);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
 CREATE TABLE IF NOT EXISTS sessions (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -99,6 +116,55 @@ CREATE TABLE IF NOT EXISTS import_limits (
   attempts integer NOT NULL DEFAULT 0,
   PRIMARY KEY(school_id,user_id)
 );
+CREATE TABLE IF NOT EXISTS registration_attempts (
+  attempt_key text PRIMARY KEY,
+  attempts integer NOT NULL DEFAULT 0,
+  window_started_at timestamptz NOT NULL DEFAULT now(),
+  blocked_until timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS school_email_confirmations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_school_email_confirmation_school ON school_email_confirmations(school_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS school_subscriptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL UNIQUE REFERENCES schools(id) ON DELETE CASCADE,
+  monthly_price_xof integer NOT NULL DEFAULT 50000 CHECK(monthly_price_xof=50000),
+  billing_cycle text NOT NULL DEFAULT 'monthly' CHECK(billing_cycle='monthly'),
+  status text NOT NULL DEFAULT 'pending_payment' CHECK(status IN ('pending_payment','active','grace_period','suspended','cancelled')),
+  is_exempt boolean NOT NULL DEFAULT false,
+  started_at timestamptz,
+  current_period_start timestamptz,
+  current_period_end timestamptz,
+  paid_until timestamptz,
+  grace_period_end timestamptz,
+  suspended_at timestamptz,
+  cancelled_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK(current_period_end IS NULL OR current_period_start IS NOT NULL),
+  CHECK(paid_until IS NULL OR started_at IS NOT NULL),
+  CHECK(grace_period_end IS NULL OR paid_until IS NOT NULL)
+);
+INSERT INTO school_subscriptions(school_id,status,is_exempt,started_at,current_period_start,current_period_end,paid_until,grace_period_end,suspended_at)
+SELECT s.id,
+  CASE WHEN s.subscription_status='suspended' THEN 'suspended' ELSE 'active' END,
+  EXISTS(SELECT 1 FROM users u WHERE u.school_id=s.id AND u.is_platform_admin=true),
+  s.created_at,
+  date_trunc('day',s.created_at),
+  COALESCE(s.subscription_due_date::timestamptz + interval '1 day' - interval '1 second',now()+interval '30 days'),
+  COALESCE(s.subscription_due_date::timestamptz + interval '1 day' - interval '1 second',now()+interval '30 days'),
+  COALESCE(s.subscription_due_date::timestamptz + interval '8 days' - interval '1 second',now()+interval '37 days'),
+  s.suspended_at
+FROM schools s
+ON CONFLICT(school_id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS subscription_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
@@ -108,6 +174,61 @@ CREATE TABLE IF NOT EXISTS subscription_payments (
   UNIQUE(school_id,reference)
 );
 CREATE INDEX IF NOT EXISTS idx_subscription_payments_date ON subscription_payments(paid_at DESC);
+CREATE TABLE IF NOT EXISTS platform_payment_proofs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  content_type text NOT NULL CHECK(content_type IN ('application/pdf','image/png','image/jpeg')),
+  original_name text NOT NULL,
+  size_bytes integer NOT NULL CHECK(size_bytes>0 AND size_bytes<=2097152),
+  sha256 text NOT NULL,
+  content bytea NOT NULL,
+  uploaded_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS platform_subscription_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE RESTRICT,
+  subscription_id uuid NOT NULL REFERENCES school_subscriptions(id) ON DELETE RESTRICT,
+  amount_expected_xof integer NOT NULL CHECK(amount_expected_xof=50000),
+  amount_received_xof integer NOT NULL CHECK(amount_received_xof>0),
+  payment_method text NOT NULL CHECK(payment_method IN ('cash','wave','orange_money','bank_transfer','cheque','other')),
+  external_reference text,
+  receipt_number text NOT NULL UNIQUE,
+  payment_period_start timestamptz NOT NULL,
+  payment_period_end timestamptz NOT NULL,
+  paid_at timestamptz NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  recorded_by_user_id uuid NOT NULL REFERENCES users(id),
+  status text NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed','cancelled')),
+  notes text,
+  proof_file_id uuid REFERENCES platform_payment_proofs(id),
+  cancelled_at timestamptz,
+  cancelled_by_user_id uuid REFERENCES users(id),
+  cancellation_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK(payment_period_end>payment_period_start),
+  CHECK((status='confirmed' AND cancelled_at IS NULL AND cancelled_by_user_id IS NULL AND cancellation_reason IS NULL) OR
+        (status='cancelled' AND cancelled_at IS NOT NULL AND cancelled_by_user_id IS NOT NULL AND cancellation_reason IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_subscription_reference ON platform_subscription_payments(school_id,external_reference) WHERE external_reference IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_platform_subscription_payment_school ON platform_subscription_payments(school_id,paid_at DESC);
+CREATE TABLE IF NOT EXISTS subscription_notifications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  event_type text NOT NULL CHECK(event_type IN ('expiry_reminder','suspension_warning')),
+  period_end timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,event_type,period_end)
+);
+INSERT INTO platform_subscription_payments(id,school_id,subscription_id,amount_expected_xof,amount_received_xof,payment_method,external_reference,receipt_number,payment_period_start,payment_period_end,paid_at,recorded_at,recorded_by_user_id,status,notes,created_at,updated_at)
+SELECT p.id,p.school_id,ss.id,50000,GREATEST(1,(p.amount_minor/100)::integer),
+  CASE p.method WHEN 'Espèces' THEN 'cash' WHEN 'Wave' THEN 'wave' WHEN 'Orange Money' THEN 'orange_money' WHEN 'Virement' THEN 'bank_transfer' WHEN 'Chèque' THEN 'cheque' ELSE 'other' END,
+  p.reference,'ABN-LEGACY-'||upper(substr(replace(p.id::text,'-',''),1,16)),
+  date_trunc('day',p.paid_at),p.coverage_end::timestamptz + interval '1 day' - interval '1 second',p.paid_at,p.created_at,p.recorded_by,'confirmed',p.notes,p.created_at,p.created_at
+FROM subscription_payments p JOIN school_subscriptions ss ON ss.school_id=p.school_id
+WHERE p.recorded_by IS NOT NULL
+ON CONFLICT(id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS students (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   matricule text NOT NULL, first_name text NOT NULL, last_name text NOT NULL, class_name text,
@@ -155,6 +276,8 @@ CREATE TABLE IF NOT EXISTS payments (
   amount_minor bigint NOT NULL CHECK(amount_minor > 0), currency char(3) NOT NULL,
   method text NOT NULL, reference text NOT NULL, paid_at timestamptz NOT NULL DEFAULT now(), UNIQUE(school_id,reference)
 );
+CREATE OR REPLACE VIEW student_fee_payments AS
+SELECT id,school_id,student_id,invoice_id,amount_minor,currency,method,reference,paid_at FROM payments;
 CREATE TABLE IF NOT EXISTS receipts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
   payment_id uuid NOT NULL UNIQUE REFERENCES payments(id), number text NOT NULL,

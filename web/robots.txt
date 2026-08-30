@@ -4,6 +4,7 @@ Disallow: /app
 Disallow: /admin
 Disallow: /connexion
 Disallow: /connexion-parent
+Disallow: /confirmer-inscription
 Disallow: /api/
 
 Sitemap: https://www.scolarispay.online/sitemap.xml

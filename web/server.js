@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const files = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/connexion": ["connexion.html", "text/html; charset=utf-8"],
+  "/inscription-ecole": ["inscription-ecole.html", "text/html; charset=utf-8"],
+  "/confirmer-inscription": ["confirmer-inscription.html", "text/html; charset=utf-8"],
   "/connexion-parent": ["connexion-parent.html", "text/html; charset=utf-8"],
   "/confidentialite": ["confidentialite.html", "text/html; charset=utf-8"],
   "/mentions-legales": ["mentions-legales.html", "text/html; charset=utf-8"],
@@ -11,6 +13,8 @@ const files = {
   "/protection-donnees": ["protection-donnees.html", "text/html; charset=utf-8"],
   "/public.css": ["public.css", "text/css; charset=utf-8"],
   "/login.js": ["login.js", "text/javascript; charset=utf-8"],
+  "/registration.js": ["registration.js", "text/javascript; charset=utf-8"],
+  "/registration-confirm.js": ["registration-confirm.js", "text/javascript; charset=utf-8"],
   "/parent-login.js": ["parent-login.js", "text/javascript; charset=utf-8"],
   "/security.js": ["security.js", "text/javascript; charset=utf-8"],
   "/brand.svg": ["brand.svg", "image/svg+xml"],

@@ -171,12 +171,12 @@ export function permissionFor(method, pathname) {
     if (pathname.startsWith("/api/exports/")) return "exports.read";
     if (pathname.startsWith("/api/guardians")) return "guardians.read";
     if (pathname.startsWith("/api/reminders")) return "reminders.read";
-    if (pathname.startsWith("/api/invoices") || pathname.startsWith("/api/payments") || pathname.startsWith("/api/receipts") || pathname.startsWith("/api/collections") || pathname.startsWith("/api/dashboard")) return "billing.read";
+    if (pathname.startsWith("/api/invoices") || pathname.startsWith("/api/payments") || pathname.startsWith("/api/student-fee-payments") || pathname.startsWith("/api/receipts") || pathname.startsWith("/api/collections") || pathname.startsWith("/api/dashboard")) return "billing.read";
     return "students.read";
   }
   if (pathname.startsWith("/api/students") || pathname.startsWith("/api/guardians") || pathname.startsWith("/api/classes") || pathname.startsWith("/api/academic-years") || pathname.startsWith("/api/enrollments") || pathname.startsWith("/api/student-guardians")) return "students.write";
   if (pathname.startsWith("/api/invoices")) return "billing.write";
-  if (pathname.startsWith("/api/payments")) return "payments.write";
+  if (pathname.startsWith("/api/payments") || pathname.startsWith("/api/student-fee-payments")) return "payments.write";
   if (pathname.startsWith("/api/reminders") || pathname.startsWith("/api/parent-links")) return "reminders.write";
   return null;
 }
