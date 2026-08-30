@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || 'postgres://scolaris:scolaris_dev@localhost:5432/scolaris' });
+const databaseUrl = new URL(process.env.DATABASE_URL || 'postgres://scolaris:scolaris_dev@localhost:5432/scolaris');
+if (['prefer', 'require', 'verify-ca'].includes(databaseUrl.searchParams.get('sslmode'))) databaseUrl.searchParams.set('sslmode', 'verify-full');
+const pool = new pg.Pool({ connectionString: databaseUrl.toString() });
 await pool.query(await readFile(new URL('./schema.sql', import.meta.url), 'utf8'));
 console.log('Migration SCOLARIS terminée');
 await pool.end();

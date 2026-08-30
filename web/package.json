@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "lint": "node --check server.js && node --check login.js && node --check parent-login.js && node --check security.js",
+    "build": "npm run lint"
   }
 }

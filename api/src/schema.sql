@@ -12,6 +12,29 @@ CREATE TABLE IF NOT EXISTS users (
   name text NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL,
   role text NOT NULL CHECK(role IN ('owner','director','accountant','teacher')), created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_platform_admin boolean NOT NULL DEFAULT false;
+UPDATE users SET is_platform_admin=true
+WHERE id=(SELECT id FROM users ORDER BY created_at,id LIMIT 1)
+  AND NOT EXISTS(SELECT 1 FROM users WHERE is_platform_admin=true);
+CREATE TABLE IF NOT EXISTS sessions (
+  id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  ip_hash text,
+  user_agent_hash text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id,expires_at) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS login_attempts (
+  attempt_key text PRIMARY KEY,
+  attempts integer NOT NULL DEFAULT 0,
+  first_attempt_at timestamptz NOT NULL DEFAULT now(),
+  locked_until timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS subscription_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,

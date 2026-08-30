@@ -1,0 +1,10 @@
+{
+  "name": "scolaris-pay",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "test": "npm --prefix api test",
+    "lint": "npm --prefix api run lint && npm --prefix web run lint",
+    "build": "npm run lint && npm run test"
+  }
+}

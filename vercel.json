@@ -1,13 +1,55 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "web",
   "functions": {
     "api/index.js": {
-      "includeFiles": "api/src/schema.sql"
+      "includeFiles": "api/src/*"
     }
   },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'sha256-NNme93D4n+Gu1p9//+JwLHrj6OWdvg1jZID9XvD08kU='; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" }
+      ]
+    },
+    {
+      "source": "/connexion",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    },
+    {
+      "source": "/connexion-parent",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    },
+    {
+      "source": "/app",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
+        { "key": "Cache-Control", "value": "private, no-store, max-age=0" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" }
+      ]
+    }
+  ],
   "rewrites": [
+    { "source": "/app", "destination": "/api/private/app" },
     { "source": "/api/:path*", "destination": "/api" },
-    { "source": "/", "destination": "/web/index.html" }
+    { "source": "/connexion", "destination": "/connexion.html" },
+    { "source": "/connexion-parent", "destination": "/connexion-parent.html" },
+    { "source": "/confidentialite", "destination": "/confidentialite.html" },
+    { "source": "/mentions-legales", "destination": "/mentions-legales.html" },
+    { "source": "/conditions-utilisation", "destination": "/conditions-utilisation.html" },
+    { "source": "/protection-donnees", "destination": "/protection-donnees.html" },
+    { "source": "/", "destination": "/index.html" }
   ],
   "crons": [
     { "path": "/api/cron/subscriptions", "schedule": "10 0 * * *" }
