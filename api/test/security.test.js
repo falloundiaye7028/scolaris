@@ -105,6 +105,11 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(hasPermission("teacher", "attendance.update"), true);
   assert.equal(hasPermission("teacher", "attendance.reports"), false);
   assert.equal(hasPermission("accountant", "attendance.read"), false);
+  assert.equal(hasPermission("owner", "assessments.lock"), true);
+  assert.equal(hasPermission("director", "grading_settings.manage"), true);
+  assert.equal(hasPermission("teacher", "grades.enter"), true);
+  assert.equal(hasPermission("teacher", "assessments.lock"), false);
+  assert.equal(hasPermission("accountant", "grades.read"), false);
   assert.equal(hasPermission("unknown", "students.read"), false);
   assert.equal(permissionFor("POST", "/api/students"), "students.write");
   assert.equal(permissionFor("POST", "/api/fee-definitions"), "fee_definitions.write");
@@ -118,6 +123,12 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(permissionFor("DELETE", "/api/rooms/123"), "rooms.manage");
   assert.equal(permissionFor("GET", "/api/lesson-sessions"), "lesson_sessions.read");
   assert.equal(permissionFor("PUT", "/api/lesson-sessions/123"), "lesson_sessions.manage");
+  assert.equal(permissionFor("GET", "/api/assessments"), "assessments.read");
+  assert.equal(permissionFor("POST", "/api/assessments"), "assessments.create");
+  assert.equal(permissionFor("POST", "/api/assessments/123/grades"), "grades.enter");
+  assert.equal(permissionFor("POST", "/api/assessments/123/lock"), "assessments.lock");
+  assert.equal(permissionFor("GET", "/api/grade-reports.csv"), "grade_reports.export");
+  assert.equal(permissionFor("PUT", "/api/teaching-assignments/123/coefficient"), "grading_settings.manage");
   assert.equal(permissionFor("GET", "/api/attendance/sessions"), "attendance.read");
   assert.equal(permissionFor("POST", "/api/attendance/sessions/123/records"), "attendance.mark");
   assert.equal(permissionFor("POST", "/api/attendance/justifications"), "attendance.justify");
@@ -132,6 +143,20 @@ test("l'interface M3 conserve des actions textuelles et une disposition mobile",
   assert.match(privateHtml, /attendance-actions/);
   assert.match(privateHtml, /@media\(max-width:620px\)[\s\S]*attendance-student/);
   assert.match(privateHtml, /Présent[\s\S]*Absent[\s\S]*Retard[\s\S]*Justifié/);
+});
+
+test("l'interface M4 couvre évaluations, notes, moyennes et mobile", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /data-view="grades"/);
+  assert.match(privateHtml, /Notes &amp; évaluations/);
+  assert.match(privateHtml, /Créer une évaluation/);
+  assert.match(privateHtml, /Enregistrer les notes/);
+  assert.match(privateHtml, /Publier/);
+  assert.match(privateHtml, /Verrouiller/);
+  assert.match(privateHtml, /Rapports et moyennes/);
+  assert.match(privateHtml, /releve-notes\.csv/);
+  assert.match(privateHtml, /@media\(max-width:620px\)[\s\S]*grade-student/);
+  assert.match(privateHtml, /Absent[\s\S]*Absence justifiée[\s\S]*Dispensé[\s\S]*En attente/);
 });
 
 test("l'échappement central neutralise scripts, attributs et caractères spéciaux", async () => {

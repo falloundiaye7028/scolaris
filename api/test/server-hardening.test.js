@@ -6,6 +6,7 @@ const server = await readFile(new URL("../src/server.js", import.meta.url), "utf
 const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
 const timetableService = await readFile(new URL("../src/timetable-service.js", import.meta.url), "utf8");
 const attendanceService = await readFile(new URL("../src/attendance-service.js", import.meta.url), "utf8");
+const gradesService = await readFile(new URL("../src/grades-service.js", import.meta.url), "utf8");
 const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
@@ -60,6 +61,19 @@ test("M3 sérialise les appels, contrôle l'enseignant et agrège sans N+1", () 
   assert.match(attendanceService, /session\.status='cancelled'|status === "cancelled"/);
   assert.match(attendanceService, /effectivePresence = present \+ late/);
   assert.match(attendanceService, /student\.absent/);
+});
+
+test("M4 sérialise les notes, contrôle l'affectation et calcule en NUMERIC", () => {
+  assert.match(server, /createGradesRouter/);
+  assert.match(server, /grades-schema\.sql/);
+  assert.match(gradesService, /pg_advisory_xact_lock/);
+  assert.match(gradesService, /Cette évaluation n’est pas affectée à cet enseignant/);
+  assert.match(gradesService, /jsonb_to_recordset/);
+  assert.match(gradesService, /expected_version !== current\.version/);
+  assert.match(gradesService, /Ces notes ont été modifiées par un autre utilisateur/);
+  assert.match(gradesService, /sum\(effective_score\*coefficient\)/);
+  assert.match(gradesService, /sum\(subject_average_raw\*subject_coefficient\)/);
+  assert.match(gradesService, /grade_reports\.exported/);
 });
 
 test("l'abonnement plateforme est administré uniquement par les routes privilégiées", () => {
