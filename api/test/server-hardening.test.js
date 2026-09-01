@@ -5,6 +5,7 @@ import test from "node:test";
 const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
 const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
 const timetableService = await readFile(new URL("../src/timetable-service.js", import.meta.url), "utf8");
+const attendanceService = await readFile(new URL("../src/attendance-service.js", import.meta.url), "utf8");
 const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
@@ -47,6 +48,18 @@ test("M2 sérialise les calendriers et explique les conflits", () => {
   assert.match(timetableService, /est déjà occupée/);
   assert.match(timetableService, /possède déjà un cours/);
   assert.match(timetableService, /days > 62/);
+});
+
+test("M3 sérialise les appels, contrôle l'enseignant et agrège sans N+1", () => {
+  assert.match(server, /createAttendanceRouter/);
+  assert.match(server, /attendance-schema\.sql/);
+  assert.match(attendanceService, /pg_advisory_xact_lock/);
+  assert.match(attendanceService, /Cette séance n’est pas affectée à cet enseignant/);
+  assert.match(attendanceService, /jsonb_to_recordset/);
+  assert.match(attendanceService, /expected_version !== current\.version/);
+  assert.match(attendanceService, /session\.status='cancelled'|status === "cancelled"/);
+  assert.match(attendanceService, /effectivePresence = present \+ late/);
+  assert.match(attendanceService, /student\.absent/);
 });
 
 test("l'abonnement plateforme est administré uniquement par les routes privilégiées", () => {

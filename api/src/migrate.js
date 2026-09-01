@@ -6,6 +6,7 @@ const pool = new pg.Pool({ connectionString: databaseUrl.toString() });
 await pool.query(await readFile(new URL('./schema.sql', import.meta.url), 'utf8'));
 await pool.query(await readFile(new URL('./academic-schema.sql', import.meta.url), 'utf8'));
 await pool.query(await readFile(new URL('./timetable-schema.sql', import.meta.url), 'utf8'));
+await pool.query(await readFile(new URL('./attendance-schema.sql', import.meta.url), 'utf8'));
 await pool.query(await readFile(new URL('./fee-schema.sql', import.meta.url), 'utf8'));
 console.log('Migration SCOLARIS terminée');
 await pool.end();

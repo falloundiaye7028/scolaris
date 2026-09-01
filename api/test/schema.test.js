@@ -5,6 +5,7 @@ import test from "node:test";
 const schema = await readFile(new URL("../src/schema.sql", import.meta.url), "utf8");
 const academicSchema = await readFile(new URL("../src/academic-schema.sql", import.meta.url), "utf8");
 const timetableSchema = await readFile(new URL("../src/timetable-schema.sql", import.meta.url), "utf8");
+const attendanceSchema = await readFile(new URL("../src/attendance-schema.sql", import.meta.url), "utf8");
 const feeSchema = await readFile(new URL("../src/fee-schema.sql", import.meta.url), "utf8");
 
 test("la migration de sécurité est additive et révocable", () => {
@@ -105,4 +106,18 @@ test("M2 matérialise les affectations, créneaux et séances sans destruction",
   assert.match(timetableSchema, /lesson_sessions_school_assignment_year_fkey/);
   assert.match(timetableSchema, /lesson session outside academic year/);
   assert.doesNotMatch(timetableSchema, /DROP TABLE|DROP COLUMN/i);
+});
+
+test("M3 relie chaque présence à une séance et à une inscription du même établissement", () => {
+  for (const table of ["academic_periods", "attendance_justification_documents", "attendance_records", "attendance_record_events", "attendance_domain_events"]) {
+    assert.match(attendanceSchema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(attendanceSchema, /UNIQUE\(school_id,lesson_session_id,student_id\)/);
+  assert.match(attendanceSchema, /attendance_records_school_session_fkey/);
+  assert.match(attendanceSchema, /attendance_records_school_enrollment_fkey/);
+  assert.match(attendanceSchema, /attendance_records_school_document_student_fkey/);
+  assert.match(attendanceSchema, /student not enrolled for lesson session/);
+  assert.match(attendanceSchema, /attendance forbidden for cancelled lesson session/);
+  assert.match(attendanceSchema, /version integer NOT NULL DEFAULT 1/);
+  assert.doesNotMatch(attendanceSchema, /DROP TABLE|DROP COLUMN/i);
 });

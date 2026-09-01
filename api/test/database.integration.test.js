@@ -246,6 +246,107 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.ok((await ownSchedule.json()).every((entry) => entry.teacher_id === teacherA.id));
   assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie: m2TeacherCookie, "content-type": "application/json" }, body: JSON.stringify(entryPayload) })).status, 403);
 
+  // M3 — appels adossés aux séances, correction historisée, permissions et rapports.
+  const callSession = generatedSessions.find((session) => session.id !== firstSession.id);
+  const cancelledCall = await request(`/api/attendance/sessions/${firstSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: schoolAStudent, status: "present" }] }) });
+  assert.equal(cancelledCall.status, 409);
+  const rosterResponse = await request(`/api/attendance/sessions/${callSession.id}/roster`, { headers: { cookie } });
+  assert.equal(rosterResponse.status, 200);
+  const roster = await rosterResponse.json();
+  assert.equal(roster.students.length, 2);
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: schoolAStudent, status: "travel" }] }) })).status, 400);
+  const outsideStudent = (await admin.query("INSERT INTO students(school_id,matricule,first_name,last_name) VALUES($1,'A-OUT','Hors','Classe') RETURNING id", [schoolA])).rows[0];
+  await admin.query("INSERT INTO enrollments(school_id,student_id,class_id,academic_year_id) VALUES($1,$2,$3,$4)", [schoolA, outsideStudent.id, secondClass.id, currentYear.id]);
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: outsideStudent.id, status: "present" }] }) })).status, 400);
+  await admin.query("DELETE FROM enrollments WHERE school_id=$1 AND student_id=$2", [schoolA, outsideStudent.id]);
+  await admin.query("DELETE FROM students WHERE school_id=$1 AND id=$2", [schoolA, outsideStudent.id]);
+  const m3SchoolBStudent = students.rows.find((row) => row.school_id === schoolB).id;
+  const schoolBEnrollment = (await admin.query("INSERT INTO enrollments(school_id,student_id,class_id,academic_year_id) VALUES($1,$2,$3,$4) RETURNING id", [schoolB, m3SchoolBStudent, schoolBClass.id, schoolBYear.id])).rows[0];
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: m3SchoolBStudent, status: "present" }] }) })).status, 400);
+  const invalidDocument = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "faux.pdf", contentType: "application/pdf", base64: Buffer.from("not a pdf").toString("base64") }) });
+  assert.equal(invalidDocument.status, 400);
+  const forbiddenDocumentType = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "justificatif.txt", contentType: "text/plain", base64: Buffer.from("texte fictif").toString("base64") }) });
+  assert.equal(forbiddenDocumentType.status, 400);
+  const oversizedPdf = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20); oversizedPdf.write("%PDF-");
+  const oversizedDocument = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "trop-grand.pdf", contentType: "application/pdf", base64: oversizedPdf.toString("base64") }) });
+  assert.equal(oversizedDocument.status, 413);
+  const documentResponse = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "justificatif.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4\n% justificatif fictif\n").toString("base64") }) });
+  assert.equal(documentResponse.status, 201);
+  const attendanceDocument = await documentResponse.json();
+  const firstCall = await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [
+    { studentId: schoolAStudent, status: "present" },
+    { studentId: secondStudent.id, status: "absent" },
+  ] }) });
+  assert.equal(firstCall.status, 200);
+  const firstCallRows = (await firstCall.json()).records;
+  assert.equal(firstCallRows.length, 2);
+  await assert.rejects(
+    admin.query("INSERT INTO attendance_records(school_id,lesson_session_id,student_id,enrollment_id,status,marked_by) VALUES($1,$2,$3,$4,'present',$5)", [schoolA, callSession.id, schoolAStudent, roster.students.find((item) => item.student_id === schoolAStudent).enrollment_id, teacherA.id]),
+    (error) => error.code === "23505",
+  );
+  await assert.rejects(
+    admin.query("INSERT INTO attendance_records(school_id,lesson_session_id,student_id,enrollment_id,status,marked_by) VALUES($1,$2,$3,$4,'present',$5)", [schoolA, callSession.id, m3SchoolBStudent, schoolBEnrollment.id, teacherA.id]),
+    (error) => ["23503", "P0001"].includes(error.code),
+  );
+  const secondInitial = firstCallRows.find((item) => item.student_id === secondStudent.id);
+  const excusedCorrection = await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: secondStudent.id, status: "excused", reason: "Certificat médical fictif", justificationDocumentId: attendanceDocument.id, expectedVersion: secondInitial.version }] }) });
+  assert.equal(excusedCorrection.status, 200);
+  const corrected = (await excusedCorrection.json()).records[0];
+  assert.equal(corrected.status, "excused");
+  assert.equal(corrected.version, 2);
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: secondStudent.id, status: "present", expectedVersion: secondInitial.version }] }) })).status, 409);
+  assert.equal((await request(`/api/attendance/justifications/${attendanceDocument.id}`, { headers: { cookie } })).status, 200);
+  const teacherFirst = firstCallRows.find((item) => item.student_id === schoolAStudent);
+  const assignedTeacherCall = await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie: m2TeacherCookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: schoolAStudent, status: "late", arrivalTime: "10:12", expectedVersion: teacherFirst.version }] }) });
+  assert.equal(assignedTeacherCall.status, 200);
+  const m3OtherTeacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 Other Teacher" }, body: JSON.stringify({ email: "teacher-a2@example.test", password: "MotDePasse#2026" }) });
+  const m3OtherTeacherCookie = m3OtherTeacherLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/roster`, { headers: { cookie: m3OtherTeacherCookie, "user-agent": "M3 Other Teacher" } })).status, 403);
+  const m3AccountantLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 Accountant" }, body: JSON.stringify({ email: "caisse-a@example.test", password: "MotDePasse#2026" }) });
+  const m3AccountantCookie = m3AccountantLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/attendance/history?from=2026-09-01&to=2026-09-30", { headers: { cookie: m3AccountantCookie, "user-agent": "M3 Accountant" } })).status, 403);
+  const m3SchoolBLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 School B" }, body: JSON.stringify({ email: "direction-b@example.test", password: "MotDePasse#2026" }) });
+  const m3SchoolBCookie = m3SchoolBLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request(`/api/attendance/sessions/${callSession.id}/roster`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
+  assert.equal((await request(`/api/attendance/justifications/${attendanceDocument.id}`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
+
+  const fixtureSessions = (await admin.query(`WITH inserted AS (
+      INSERT INTO lesson_sessions(school_id,academic_year_id,timetable_entry_id,teaching_assignment_id,room_id,session_date,start_time,end_time,status)
+      SELECT $1,$2,NULL,$3,NULL,day::date,'13:00','14:00','completed' FROM generate_series('2026-10-01'::date,'2026-10-20'::date,'1 day') day
+      RETURNING id,session_date
+    ) SELECT id,session_date FROM inserted ORDER BY session_date`, [schoolA, currentYear.id, assignment.id])).rows;
+  const deterministicStatuses = [...Array(14).fill("present"), ...Array(2).fill("late"), ...Array(3).fill("absent"), "excused"];
+  for (let index = 0; index < fixtureSessions.length; index += 1) {
+    const status = deterministicStatuses[index];
+    const response = await request(`/api/attendance/sessions/${fixtureSessions[index].id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: schoolAStudent, status, arrivalTime: status === "late" ? "13:10" : undefined, reason: status === "excused" ? "Autorisation familiale fictive" : undefined }] }) });
+    assert.equal(response.status, 200);
+  }
+  const previousAcademicPeriod = await request("/api/academic-periods", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, name: "Période septembre test", kind: "term", position: 1, startsOn: "2026-09-01", endsOn: "2026-09-30" }) });
+  assert.equal(previousAcademicPeriod.status, 201);
+  const academicPeriod = await request("/api/academic-periods", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, name: "Période octobre test", kind: "term", position: 2, startsOn: "2026-10-01", endsOn: "2026-10-20" }) });
+  assert.equal(academicPeriod.status, 201);
+  const academicPeriodData = await academicPeriod.json();
+  const attendanceReport = await request(`/api/attendance/reports?scope=student&academicYearId=${currentYear.id}&studentId=${schoolAStudent}&from=2026-10-01&to=2026-10-20`, { headers: { cookie } });
+  assert.equal(attendanceReport.status, 200);
+  const attendanceReportData = await attendanceReport.json();
+  assert.deepEqual({ marked: attendanceReportData.summary.marked, present: attendanceReportData.summary.present, late: attendanceReportData.summary.late, absent: attendanceReportData.summary.absent, excused: attendanceReportData.summary.excused, attendanceRate: attendanceReportData.summary.attendanceRate }, { marked: 20, present: 14, late: 2, absent: 3, excused: 1, attendanceRate: 80 });
+  assert.equal(attendanceReportData.summary.absenceRate, 15);
+  assert.equal(attendanceReportData.summary.excusedRate, 5);
+  assert.equal(attendanceReportData.summary.lateRate, 10);
+  assert.equal(attendanceReportData.summary.student_count, 1);
+  assert.equal(attendanceReportData.periodEvolution.length, 2);
+  const periodReport = await request(`/api/attendance/reports?scope=student&academicYearId=${currentYear.id}&studentId=${schoolAStudent}&periodId=${academicPeriodData.id}`, { headers: { cookie } });
+  const periodReportData = await periodReport.json();
+  assert.equal(periodReportData.summary.marked, 20);
+  assert.equal(periodReportData.previousComparison.period.name, "Période septembre test");
+  const classReport = await request(`/api/attendance/reports?scope=class&academicYearId=${currentYear.id}&classId=${currentClass.id}&from=2026-10-01&to=2026-10-20`, { headers: { cookie } });
+  assert.ok((await classReport.json()).mostAbsent.some((item) => item.id === schoolAStudent));
+  assert.equal((await request(`/api/attendance/reports?scope=student&academicYearId=${currentYear.id}&studentId=${schoolAStudent}`, { headers: { cookie: m2TeacherCookie } })).status, 403);
+  assert.equal((await request(`/api/attendance/students/${schoolAStudent}/summary?academicYearId=${currentYear.id}`, { headers: { cookie } })).status, 200);
+  assert.equal((await request(`/api/attendance/reports.csv?scope=student&academicYearId=${currentYear.id}&studentId=${schoolAStudent}&from=2026-10-01&to=2026-10-20`, { headers: { cookie } })).status, 200);
+  assert.ok(Number((await admin.query("SELECT count(*)::int total FROM attendance_record_events WHERE school_id=$1", [schoolA])).rows[0].total) >= 23);
+  assert.ok(Number((await admin.query("SELECT count(*)::int total FROM attendance_domain_events WHERE school_id=$1", [schoolA])).rows[0].total) >= 7);
+
   const registrationDefinition = { academicYearId: currentYear.id, classId: currentClass.id, name: "Inscription annuelle", feeType: "registration", amountXof: 25_000, isMandatory: true };
   const registrationPreview = await request("/api/fee-assignments/preview", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: registrationDefinition, scope: "class", classId: currentClass.id, dueDate: "2026-09-15" }) });
   assert.equal(registrationPreview.status, 200);
