@@ -3,17 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.20.0",
+    "npm": "11.19.1"
+  },
+  "packageManager": "npm@11.19.1",
   "scripts": {
+    "preinstall": "node ../scripts/verify-toolchain.mjs",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/migrate.js",
-    "test": "node --test",
+    "test": "cross-env NODE_ENV=test node --test",
     "lint": "node --check src/server.js && node --check src/academic-service.js && node --check src/timetable-service.js && node --check src/attendance-service.js && node --check src/grades-service.js && node --check src/grade-math.js && node --check src/fee-service.js && node --check src/security.js && node --check src/subscriptions.js && node --check src/auth-security.js && node --check src/auth-service.js && node --check src/migrate.js",
     "typecheck": "npm run lint",
     "build": "npm run lint && npm test"
   },
   "allowScripts": {
-    "argon2": true
+    "argon2@0.45.1": true
   },
   "dependencies": {
     "argon2": "0.45.1",

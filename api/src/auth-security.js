@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import argon2 from "argon2";
 import bcrypt from "bcryptjs";
 
-const ARGON2_OPTIONS = Object.freeze({
+export const ARGON2_POLICY = Object.freeze({
+  policyVersion: 1,
+  variant: "argon2id",
+  version: 19,
   type: argon2.argon2id,
   memoryCost: 19_456,
   timeCost: 2,
@@ -10,8 +13,51 @@ const ARGON2_OPTIONS = Object.freeze({
   hashLength: 32,
 });
 
-export function validateNewPassword(password) {
+export const AUTH_PASSWORD_MAX_UTF8_BYTES = 256;
+export const ARGON2_MAX_CONCURRENCY = 4;
+export const ARGON2_TIMEOUT_MS = 5_000;
+const metrics = { started: 0, completed: 0, rejected: 0, timedOut: 0, nativeErrors: 0, active: 0, peakActive: 0 };
+let argonDriver = argon2;
+
+function passwordInput(password, { required = false } = {}) {
   const value = String(password ?? "");
+  if ((required && !value) || Buffer.byteLength(value, "utf8") > AUTH_PASSWORD_MAX_UTF8_BYTES) throw new Error("invalid_credentials");
+  return value;
+}
+
+async function boundedArgon(operation) {
+  if (metrics.active >= ARGON2_MAX_CONCURRENCY) {
+    metrics.rejected += 1;
+    throw new Error("invalid_credentials");
+  }
+  metrics.started += 1;
+  metrics.active += 1;
+  metrics.peakActive = Math.max(metrics.peakActive, metrics.active);
+  let timer;
+  const work = Promise.resolve().then(operation);
+  work.then(
+    () => { metrics.completed += 1; },
+    () => { metrics.nativeErrors += 1; },
+  ).finally(() => { metrics.active -= 1; });
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => { metrics.timedOut += 1; reject(new Error("invalid_credentials")); }, ARGON2_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try { return await Promise.race([work, timeout]); }
+  finally { clearTimeout(timer); }
+}
+
+export function getArgon2Metrics() {
+  return Object.freeze({ ...metrics });
+}
+
+export function setArgon2DriverForTests(driver) {
+  if (process.env.NODE_ENV !== "test") throw new Error("test_only");
+  argonDriver = driver || argon2;
+}
+
+export function validateNewPassword(password) {
+  const value = passwordInput(password, { required: true });
   if (value.length < 12 || value.length > 128 || !/[A-Za-zÀ-ÿ]/.test(value) || !/\d/.test(value)) {
     throw new Error("weak_password");
   }
@@ -19,34 +65,33 @@ export function validateNewPassword(password) {
 }
 
 export async function hashPassword(password) {
-  return argon2.hash(validateNewPassword(password), ARGON2_OPTIONS);
+  return boundedArgon(() => argonDriver.hash(validateNewPassword(password), ARGON2_POLICY));
 }
 
 export async function rehashVerifiedPassword(password) {
-  const value = String(password ?? "");
-  if (!value || value.length > 128) throw new Error("invalid_credentials");
-  return argon2.hash(value, ARGON2_OPTIONS);
+  const value = passwordInput(password, { required: true });
+  return boundedArgon(() => argonDriver.hash(value, ARGON2_POLICY));
 }
 
 export async function verifyPassword(storedHash, password) {
   const hash = String(storedHash ?? "");
-  const candidate = String(password ?? "");
+  let candidate;
+  try { candidate = passwordInput(password); }
+  catch { return { valid: false, needsRehash: false }; }
   try {
     if (hash.startsWith("$argon2id$")) {
-      const valid = await argon2.verify(hash, candidate);
-      return { valid, needsRehash: valid && argon2.needsRehash(hash, ARGON2_OPTIONS) };
+      const valid = await boundedArgon(() => argonDriver.verify(hash, candidate));
+      return { valid, needsRehash: valid && argonDriver.needsRehash(hash, ARGON2_POLICY) };
     }
     if (/^\$2[aby]\$/.test(hash)) {
       const valid = await bcrypt.compare(candidate, hash);
       return { valid, needsRehash: valid };
     }
-  } catch {
-    // The caller receives the same neutral authentication failure for malformed hashes.
-  }
-  await argon2.verify(
+  } catch { return { valid: false, needsRehash: false }; }
+  await boundedArgon(() => argonDriver.verify(
     "$argon2id$v=19$m=19456,t=2,p=1$T29uZVN0YXRpY1NhbHQ$V6W31h6S5a9Q1f3D01dWIGEzDIqJodnO3tZJvV5JE7M",
     candidate,
-  ).catch(() => false);
+  )).catch(() => false);
   return { valid: false, needsRehash: false };
 }
 

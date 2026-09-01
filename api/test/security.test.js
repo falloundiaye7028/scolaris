@@ -63,7 +63,7 @@ test("le parseur de cookies ne confond pas les valeurs", () => {
 });
 
 test("les exports neutralisent les formules CSV", () => {
-  for (const value of ["=1+1", "+cmd", "-2+3", "@SUM(A1)", "\tmalveillant", "\rmalveillant"]) {
+  for (const value of ["=HYPERLINK(\"https://example.test\")", "+SUM(A1:A2)", "-10+20", "@command", "\tmalveillant", "\rmalveillant"]) {
     assert.match(quoteCsv(value), /^"'/);
   }
   assert.equal(quoteCsv("texte, normal"), '"texte, normal"');

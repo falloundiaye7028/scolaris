@@ -140,6 +140,12 @@ CREATE OR REPLACE FUNCTION validate_m4_grade_reference() RETURNS trigger LANGUAG
 DECLARE assessment_row record; enrollment_row record; year_row record; period_row record; assignment_row record; scale numeric;
 BEGIN
   IF TG_TABLE_NAME='assessments' THEN
+    IF TG_OP='UPDATE' AND OLD.status IN ('published','locked') AND (
+      NEW.academic_year_id IS DISTINCT FROM OLD.academic_year_id OR NEW.academic_period_id IS DISTINCT FROM OLD.academic_period_id
+      OR NEW.teaching_assignment_id IS DISTINCT FROM OLD.teaching_assignment_id OR NEW.assessment_type_id IS DISTINCT FROM OLD.assessment_type_id
+      OR NEW.assessment_date IS DISTINCT FROM OLD.assessment_date OR NEW.maximum_score IS DISTINCT FROM OLD.maximum_score
+      OR NEW.coefficient IS DISTINCT FROM OLD.coefficient
+    ) THEN RAISE EXCEPTION 'published assessment calculation inputs are immutable'; END IF;
     SELECT starts_on,ends_on INTO year_row FROM academic_years WHERE school_id=NEW.school_id AND id=NEW.academic_year_id;
     SELECT starts_on,ends_on INTO period_row FROM academic_periods WHERE school_id=NEW.school_id AND id=NEW.academic_period_id AND academic_year_id=NEW.academic_year_id;
     SELECT assignment.status,subject.active INTO assignment_row
@@ -179,3 +185,165 @@ CREATE TRIGGER trg_validate_m4_assessment BEFORE INSERT OR UPDATE ON assessments
 DROP TRIGGER IF EXISTS trg_validate_m4_grade ON grades;
 CREATE TRIGGER trg_validate_m4_grade BEFORE INSERT OR UPDATE ON grades FOR EACH ROW EXECUTE FUNCTION validate_m4_grade_reference();
 
+-- M4.0 — controls added on top of the pre-authorized candidate. All changes are additive.
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS cancellation_reason text;
+UPDATE assessments
+SET cancellation_reason='Migration M4.0 : motif historique non renseigné'
+WHERE status='cancelled' AND published_at IS NOT NULL
+  AND (cancellation_reason IS NULL OR length(btrim(cancellation_reason))<8);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='assessments_workflow_invariants_check') THEN
+    ALTER TABLE assessments ADD CONSTRAINT assessments_workflow_invariants_check CHECK(
+      (status='draft' AND published_at IS NULL AND published_by IS NULL AND locked_at IS NULL AND locked_by IS NULL)
+      OR (status='published' AND published_at IS NOT NULL AND published_by IS NOT NULL AND locked_at IS NULL AND locked_by IS NULL)
+      OR (status='locked' AND published_at IS NOT NULL AND published_by IS NOT NULL AND locked_at IS NOT NULL AND locked_by IS NOT NULL)
+      OR (status='cancelled' AND locked_at IS NULL AND locked_by IS NULL AND (published_at IS NULL OR length(btrim(cancellation_reason)) BETWEEN 8 AND 500))
+    );
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS grading_policy_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  academic_year_id uuid NOT NULL,
+  version integer NOT NULL CHECK(version>0),
+  scale_max numeric(8,2) NOT NULL CHECK(scale_max>0 AND scale_max<=1000),
+  rounding_precision smallint NOT NULL CHECK(rounding_precision BETWEEN 0 AND 4),
+  absence_policy text NOT NULL CHECK(absence_policy IN ('exclude','zero')),
+  missing_grade_policy text NOT NULL CHECK(missing_grade_policy='exclude'),
+  effective_from timestamptz NOT NULL DEFAULT now(),
+  changed_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,id), UNIQUE(school_id,academic_year_id,version),
+  CONSTRAINT grading_policy_versions_year_fkey FOREIGN KEY(school_id,academic_year_id) REFERENCES academic_years(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grading_policy_versions_actor_fkey FOREIGN KEY(school_id,changed_by) REFERENCES users(school_id,id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_grading_policy_versions_current ON grading_policy_versions(school_id,academic_year_id,version DESC);
+
+INSERT INTO grading_policy_versions(school_id,academic_year_id,version,scale_max,rounding_precision,absence_policy,missing_grade_policy,effective_from,changed_by)
+SELECT year.school_id,year.id,1,settings.scale_max,settings.rounding_precision,settings.absence_policy,settings.missing_grade_policy,settings.updated_at,settings.updated_by
+FROM academic_years year JOIN grading_settings settings ON settings.school_id=year.school_id
+ON CONFLICT(school_id,academic_year_id,version) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS subject_coefficient_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  academic_year_id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  subject_id uuid NOT NULL,
+  coefficient numeric(8,4) NOT NULL CHECK(coefficient>0 AND coefficient<=1000),
+  version integer NOT NULL CHECK(version>0),
+  effective_from timestamptz NOT NULL DEFAULT now(),
+  changed_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,id), UNIQUE(school_id,academic_year_id,class_id,subject_id,version),
+  CONSTRAINT subject_coefficient_versions_year_fkey FOREIGN KEY(school_id,academic_year_id) REFERENCES academic_years(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT subject_coefficient_versions_class_fkey FOREIGN KEY(school_id,class_id) REFERENCES classes(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT subject_coefficient_versions_subject_fkey FOREIGN KEY(school_id,subject_id) REFERENCES subjects(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT subject_coefficient_versions_actor_fkey FOREIGN KEY(school_id,changed_by) REFERENCES users(school_id,id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_subject_coefficient_versions_current ON subject_coefficient_versions(school_id,academic_year_id,class_id,subject_id,version DESC);
+
+INSERT INTO subject_coefficient_versions(school_id,academic_year_id,class_id,subject_id,coefficient,version,effective_from)
+SELECT DISTINCT ON (school_id,academic_year_id,class_id,subject_id) school_id,academic_year_id,class_id,subject_id,subject_coefficient,1,updated_at
+FROM teaching_assignments ORDER BY school_id,academic_year_id,class_id,subject_id,updated_at DESC,id
+ON CONFLICT(school_id,academic_year_id,class_id,subject_id,version) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS assessment_publication_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  academic_year_id uuid NOT NULL,
+  academic_period_id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  subject_id uuid NOT NULL,
+  assessment_id uuid NOT NULL,
+  version integer NOT NULL CHECK(version>0),
+  scale_max numeric(8,2) NOT NULL CHECK(scale_max>0),
+  rounding_precision smallint NOT NULL CHECK(rounding_precision BETWEEN 0 AND 4),
+  absence_policy text NOT NULL CHECK(absence_policy IN ('exclude','zero')),
+  missing_grade_policy text NOT NULL CHECK(missing_grade_policy='exclude'),
+  subject_coefficient numeric(8,4) NOT NULL CHECK(subject_coefficient>0),
+  assessment_coefficient numeric(8,4) NOT NULL CHECK(assessment_coefficient>0),
+  calculation_version integer NOT NULL DEFAULT 1 CHECK(calculation_version>0),
+  effective_from timestamptz NOT NULL,
+  published_at timestamptz NOT NULL DEFAULT now(),
+  published_by uuid NOT NULL,
+  reason text,
+  previous_snapshot_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,id), UNIQUE(school_id,assessment_id,version),
+  CONSTRAINT publication_snapshot_year_fkey FOREIGN KEY(school_id,academic_year_id) REFERENCES academic_years(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_period_fkey FOREIGN KEY(school_id,academic_period_id,academic_year_id) REFERENCES academic_periods(school_id,id,academic_year_id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_class_fkey FOREIGN KEY(school_id,class_id) REFERENCES classes(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_subject_fkey FOREIGN KEY(school_id,subject_id) REFERENCES subjects(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_assessment_fkey FOREIGN KEY(school_id,assessment_id) REFERENCES assessments(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_publisher_fkey FOREIGN KEY(school_id,published_by) REFERENCES users(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT publication_snapshot_previous_fkey FOREIGN KEY(school_id,previous_snapshot_id) REFERENCES assessment_publication_snapshots(school_id,id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_publication_snapshots_current ON assessment_publication_snapshots(school_id,assessment_id,version DESC);
+
+CREATE TABLE IF NOT EXISTS grade_versions (
+  id bigserial PRIMARY KEY,
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  grade_id uuid NOT NULL,
+  assessment_id uuid NOT NULL,
+  student_id uuid NOT NULL,
+  publication_snapshot_id uuid NOT NULL,
+  version integer NOT NULL CHECK(version>0),
+  status text NOT NULL CHECK(status IN ('scored','absent','excused','exempt','pending')),
+  score numeric(10,4),
+  normalized_score numeric(12,6),
+  comment text,
+  reason text,
+  changed_by uuid NOT NULL,
+  request_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  previous_version_id bigint,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,grade_id,version), UNIQUE(school_id,id),
+  CONSTRAINT grade_versions_grade_fkey FOREIGN KEY(school_id,grade_id) REFERENCES grades(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grade_versions_assessment_fkey FOREIGN KEY(school_id,assessment_id) REFERENCES assessments(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grade_versions_student_fkey FOREIGN KEY(school_id,student_id) REFERENCES students(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grade_versions_snapshot_fkey FOREIGN KEY(school_id,publication_snapshot_id) REFERENCES assessment_publication_snapshots(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grade_versions_actor_fkey FOREIGN KEY(school_id,changed_by) REFERENCES users(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT grade_versions_previous_fkey FOREIGN KEY(school_id,previous_version_id) REFERENCES grade_versions(school_id,id) ON DELETE RESTRICT,
+  CHECK((status='scored' AND score IS NOT NULL) OR (status<>'scored' AND score IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_grade_versions_history ON grade_versions(school_id,grade_id,version DESC);
+
+CREATE TABLE IF NOT EXISTS assessment_events (
+  id bigserial PRIMARY KEY,
+  school_id uuid NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  assessment_id uuid NOT NULL,
+  event_type text NOT NULL CHECK(event_type IN ('published','locked','reopened','cancelled')),
+  previous_status text NOT NULL,
+  new_status text NOT NULL,
+  changed_by uuid NOT NULL,
+  reason text,
+  version integer NOT NULL CHECK(version>0),
+  request_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  previous_event_id bigint,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(school_id,id),
+  CONSTRAINT assessment_events_assessment_fkey FOREIGN KEY(school_id,assessment_id) REFERENCES assessments(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT assessment_events_actor_fkey FOREIGN KEY(school_id,changed_by) REFERENCES users(school_id,id) ON DELETE RESTRICT,
+  CONSTRAINT assessment_events_previous_fkey FOREIGN KEY(school_id,previous_event_id) REFERENCES assessment_events(school_id,id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_assessment_events_history ON assessment_events(school_id,assessment_id,version DESC);
+
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS assessment_id uuid;
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS student_id uuid;
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS previous_comment text;
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS new_comment text;
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS version integer;
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS request_id uuid DEFAULT gen_random_uuid();
+ALTER TABLE grade_events ADD COLUMN IF NOT EXISTS previous_event_id bigint;
+
+CREATE OR REPLACE FUNCTION prevent_m4_history_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'M4 history is append-only for normal application roles'; END $$;
+DO $$ DECLARE table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY['grade_events','grading_policy_versions','subject_coefficient_versions','assessment_publication_snapshots','grade_versions','assessment_events'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_%I_append_only ON %I',table_name,table_name);
+    EXECUTE format('CREATE TRIGGER trg_%I_append_only BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION prevent_m4_history_mutation()',table_name,table_name);
+  END LOOP;
+END $$;

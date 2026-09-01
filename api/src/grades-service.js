@@ -25,6 +25,10 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
   );
   const ensureDefaults = async (client, schoolId) => {
     await client.query("INSERT INTO grading_settings(school_id) VALUES($1) ON CONFLICT(school_id) DO NOTHING", [schoolId]);
+    await client.query(`INSERT INTO grading_policy_versions(school_id,academic_year_id,version,scale_max,rounding_precision,absence_policy,missing_grade_policy,effective_from)
+      SELECT year.school_id,year.id,1,settings.scale_max,settings.rounding_precision,settings.absence_policy,settings.missing_grade_policy,settings.updated_at
+      FROM academic_years year JOIN grading_settings settings ON settings.school_id=year.school_id WHERE year.school_id=$1
+      ON CONFLICT(school_id,academic_year_id,version) DO NOTHING`, [schoolId]);
     for (const [code, name] of DEFAULT_TYPES) {
       await client.query("INSERT INTO assessment_types(school_id,code,name) VALUES($1,$2,$3) ON CONFLICT(school_id,code) DO NOTHING", [schoolId, code, name]);
     }
@@ -33,7 +37,10 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
     const row = (await client.query(`SELECT assessment.id,assessment.academic_year_id,assessment.academic_period_id,assessment.teaching_assignment_id,
       assessment.assessment_type_id,assessment.title,assessment.description,assessment.assessment_date,assessment.maximum_score,assessment.coefficient,
       assessment.status,assessment.published_at,assessment.locked_at,assessment.version,assignment.teacher_id,assignment.class_id,assignment.subject_id,
-      assignment.subject_coefficient,class.name class_name,subject.name subject_name,teacher.name teacher_name,type.name assessment_type
+      COALESCE((SELECT publication.subject_coefficient FROM assessment_publication_snapshots publication
+        WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id
+        ORDER BY publication.version DESC LIMIT 1),assignment.subject_coefficient) subject_coefficient,
+      class.name class_name,subject.name subject_name,teacher.name teacher_name,type.name assessment_type
       FROM assessments assessment JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
       JOIN classes class ON class.id=assignment.class_id AND class.school_id=assessment.school_id
       JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=assessment.school_id
@@ -50,37 +57,35 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
     return true;
   };
   const reportRows = async (me, { academicPeriodId, classId = null, studentId = null, subjectId = null }) => {
-    const result = await pool.query(`WITH settings AS (
-        SELECT scale_max,rounding_precision,absence_policy FROM grading_settings WHERE school_id=$1
-      ), official AS (
-        SELECT assessment.id,assessment.academic_period_id,assessment.coefficient,assignment.class_id,assignment.subject_id,
-          assignment.subject_coefficient,subject.name subject_name,grade.student_id,student.matricule,student.first_name,student.last_name,
-          CASE WHEN grade.status='scored' THEN grade.normalized_score
-               WHEN grade.status='absent' AND settings.absence_policy='zero' THEN 0::numeric ELSE NULL END effective_score
+    const result = await pool.query(`WITH official AS (
+        SELECT assessment.id,assessment.academic_period_id,snapshot.assessment_coefficient coefficient,assignment.class_id,assignment.subject_id,
+          snapshot.subject_coefficient,subject.name subject_name,grade.student_id,student.matricule,student.first_name,student.last_name,
+          snapshot.scale_max,snapshot.rounding_precision,
+          CASE WHEN grade.status='scored' THEN round((grade.score/assessment.maximum_score)*snapshot.scale_max,6)
+               WHEN grade.status='absent' AND snapshot.absence_policy='zero' THEN 0::numeric ELSE NULL END effective_score
         FROM assessments assessment
         JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
         JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=assessment.school_id
         JOIN grades grade ON grade.assessment_id=assessment.id AND grade.school_id=assessment.school_id
         JOIN students student ON student.id=grade.student_id AND student.school_id=assessment.school_id
-        CROSS JOIN settings
+        JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
         WHERE assessment.school_id=$1 AND assessment.academic_period_id=$2 AND assessment.status IN ('published','locked')
           AND ($3::uuid IS NULL OR assignment.class_id=$3) AND ($4::uuid IS NULL OR grade.student_id=$4)
           AND ($5::uuid IS NULL OR assignment.subject_id=$5)
           AND ($6::uuid IS NULL OR assignment.teacher_id=$6)
       ), subjects AS (
-        SELECT student_id,matricule,first_name,last_name,class_id,subject_id,subject_name,subject_coefficient,
+        SELECT student_id,matricule,first_name,last_name,class_id,subject_id,subject_name,max(subject_coefficient) subject_coefficient,max(scale_max) scale_max,max(rounding_precision) rounding_precision,
           sum(effective_score*coefficient)/NULLIF(sum(coefficient) FILTER(WHERE effective_score IS NOT NULL),0) subject_average_raw,
           count(*) FILTER(WHERE effective_score IS NOT NULL)::int result_count,count(DISTINCT id)::int evaluation_count
-        FROM official GROUP BY student_id,matricule,first_name,last_name,class_id,subject_id,subject_name,subject_coefficient
+        FROM official GROUP BY student_id,matricule,first_name,last_name,class_id,subject_id,subject_name
       ), generals AS (
         SELECT student_id,sum(subject_average_raw*subject_coefficient)/NULLIF(sum(subject_coefficient) FILTER(WHERE subject_average_raw IS NOT NULL),0) general_average_raw
         FROM subjects GROUP BY student_id
       )
-      SELECT subjects.*,round(subject_average_raw,(SELECT rounding_precision FROM settings)::int) subject_average,
-        round(generals.general_average_raw,(SELECT rounding_precision FROM settings)::int) general_average,
-        round(avg(subject_average_raw) OVER(PARTITION BY subjects.class_id,subjects.subject_id),(SELECT rounding_precision FROM settings)::int) class_subject_average,
-        round(avg(generals.general_average_raw) OVER(PARTITION BY subjects.class_id),(SELECT rounding_precision FROM settings)::int) class_average,
-        (SELECT scale_max FROM settings) scale_max,(SELECT rounding_precision FROM settings) rounding_precision
+      SELECT subjects.*,round(subject_average_raw,rounding_precision::int) subject_average,
+        round(generals.general_average_raw,rounding_precision::int) general_average,
+        round(avg(subject_average_raw) OVER(PARTITION BY subjects.class_id,subjects.subject_id),rounding_precision::int) class_subject_average,
+        round(avg(generals.general_average_raw) OVER(PARTITION BY subjects.class_id),rounding_precision::int) class_average
       FROM subjects JOIN generals USING(student_id) ORDER BY last_name,first_name,subject_name`, [me.schoolId, academicPeriodId, classId, studentId, subjectId, me.role === "teacher" ? me.sub : null]);
     return result.rows;
   };
@@ -114,23 +119,45 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
       const roundingPrecision = Number(input.roundingPrecision);
       if (!Number.isInteger(roundingPrecision) || roundingPrecision < 0 || roundingPrecision > 4) throw Error("invalid_body");
       const absencePolicy = oneOf(input.absencePolicy, ["exclude", "zero"]), missingGradePolicy = oneOf(input.missingGradePolicy || "exclude", ["exclude"]);
-      const row = (await pool.query(`INSERT INTO grading_settings(school_id,scale_max,rounding_precision,absence_policy,missing_grade_policy,updated_by)
-        VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(school_id) DO UPDATE SET scale_max=excluded.scale_max,rounding_precision=excluded.rounding_precision,
-        absence_policy=excluded.absence_policy,missing_grade_policy=excluded.missing_grade_policy,updated_by=excluded.updated_by,updated_at=now()
-        RETURNING id,scale_max,rounding_precision,absence_policy,missing_grade_policy,created_at,updated_at`, [me.schoolId, scaleMax, roundingPrecision, absencePolicy, missingGradePolicy, me.sub])).rows[0];
-      await audit(pool, me, "grading_settings.updated", "grading_settings", row.id, { scaleMax, roundingPrecision, absencePolicy, missingGradePolicy });
-      json(res, 200, row); return true;
+      const academicYearId = input.academicYearId ? identifier(input.academicYearId) : null, client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const year = (await client.query(`SELECT id FROM academic_years WHERE school_id=$1 AND ($2::uuid IS NULL OR id=$2)
+          ORDER BY is_current DESC,starts_on DESC LIMIT 1 FOR UPDATE`, [me.schoolId, academicYearId])).rows[0];
+        if (!year) { await client.query("ROLLBACK"); json(res, 404, { error: "Année scolaire introuvable" }); return true; }
+        const row = (await client.query(`INSERT INTO grading_settings(school_id,scale_max,rounding_precision,absence_policy,missing_grade_policy,updated_by)
+          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(school_id) DO UPDATE SET scale_max=excluded.scale_max,rounding_precision=excluded.rounding_precision,
+          absence_policy=excluded.absence_policy,missing_grade_policy=excluded.missing_grade_policy,updated_by=excluded.updated_by,updated_at=now()
+          RETURNING id,scale_max,rounding_precision,absence_policy,missing_grade_policy,created_at,updated_at`, [me.schoolId, scaleMax, roundingPrecision, absencePolicy, missingGradePolicy, me.sub])).rows[0];
+        const policy = (await client.query(`INSERT INTO grading_policy_versions(school_id,academic_year_id,version,scale_max,rounding_precision,absence_policy,missing_grade_policy,changed_by)
+          SELECT $1,$2,COALESCE(max(version),0)+1,$3,$4,$5,$6,$7 FROM grading_policy_versions WHERE school_id=$1 AND academic_year_id=$2
+          RETURNING id,academic_year_id,version,effective_from`, [me.schoolId, year.id, scaleMax, roundingPrecision, absencePolicy, missingGradePolicy, me.sub])).rows[0];
+        await audit(client, me, "grading_policy.version_created", "grading_policy", policy.id, { academicYearId: year.id, version: policy.version });
+        await client.query("COMMIT"); json(res, 200, { ...row, academic_year_id: year.id, policy_version: policy.version, effective_from: policy.effective_from });
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      return true;
     }
 
     const coefficientMatch = url.pathname.match(/^\/api\/teaching-assignments\/([^/]+)\/coefficient$/);
     if (req.method === "PUT" && coefficientMatch) {
       const id = identifier(coefficientMatch[1]), input = await body(req);
       const subjectCoefficient = decimal(input.subjectCoefficient, { min: "0", max: "1000", strictlyPositive: true });
-      const row = (await pool.query(`UPDATE teaching_assignments SET subject_coefficient=$1,updated_at=now()
-        WHERE id=$2 AND school_id=$3 AND status='active' RETURNING id,subject_coefficient,updated_at`, [subjectCoefficient, id, me.schoolId])).rows[0];
-      if (!row) { json(res, 404, { error: "Affectation pédagogique active introuvable" }); return true; }
-      await audit(pool, me, "teaching_assignment.coefficient_updated", "teaching_assignment", id, { subjectCoefficient });
-      json(res, 200, row); return true;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const assignment = (await client.query("SELECT academic_year_id,class_id,subject_id FROM teaching_assignments WHERE id=$1 AND school_id=$2 AND status='active' FOR UPDATE", [id, me.schoolId])).rows[0];
+        if (!assignment) { await client.query("ROLLBACK"); json(res, 404, { error: "Affectation pédagogique active introuvable" }); return true; }
+        const coefficient = (await client.query(`INSERT INTO subject_coefficient_versions(school_id,academic_year_id,class_id,subject_id,coefficient,version,changed_by)
+          SELECT $1,$2,$3,$4,$5,COALESCE(max(version),0)+1,$6 FROM subject_coefficient_versions
+          WHERE school_id=$1 AND academic_year_id=$2 AND class_id=$3 AND subject_id=$4 RETURNING id,version,effective_from`,
+        [me.schoolId, assignment.academic_year_id, assignment.class_id, assignment.subject_id, subjectCoefficient, me.sub])).rows[0];
+        const row = (await client.query(`UPDATE teaching_assignments SET subject_coefficient=$1,updated_at=now()
+          WHERE school_id=$2 AND academic_year_id=$3 AND class_id=$4 AND subject_id=$5 RETURNING id,subject_coefficient,updated_at`,
+        [subjectCoefficient, me.schoolId, assignment.academic_year_id, assignment.class_id, assignment.subject_id])).rows.find((item) => item.id === id);
+        await audit(client, me, "subject_coefficient.version_created", "subject_coefficient", coefficient.id, { teachingAssignmentId: id, version: coefficient.version });
+        await client.query("COMMIT"); json(res, 200, { ...row, coefficient_version: coefficient.version, effective_from: coefficient.effective_from });
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      return true;
     }
 
     if (route === "GET /api/assessment-types") {
@@ -158,19 +185,23 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
       const rows = (await pool.query(`SELECT assessment.id,assessment.academic_year_id,assessment.academic_period_id,assessment.teaching_assignment_id,
         assessment.assessment_type_id,assessment.title,assessment.description,assessment.assessment_date,assessment.maximum_score,assessment.coefficient,
         assessment.status,assessment.published_at,assessment.locked_at,assessment.version,assignment.teacher_id,assignment.class_id,assignment.subject_id,
-        assignment.subject_coefficient,class.name class_name,subject.name subject_name,teacher.name teacher_name,type.name assessment_type,
+        COALESCE(snapshot.subject_coefficient,assignment.subject_coefficient) subject_coefficient,
+        COALESCE(snapshot.scale_max,settings.scale_max) scale_max,
+        class.name class_name,subject.name subject_name,teacher.name teacher_name,type.name assessment_type,
         count(grade.id)::int entered_count,count(*) FILTER(WHERE grade.status='scored')::int scored_count,
         (SELECT count(*)::int FROM enrollments enrollment WHERE enrollment.school_id=assessment.school_id AND enrollment.academic_year_id=assessment.academic_year_id
           AND enrollment.class_id=assignment.class_id AND enrollment.status IN('active','completed') AND enrollment.enrolled_at<=assessment.assessment_date) student_count,
-        round(avg(grade.normalized_score) FILTER(WHERE grade.status='scored'),settings.rounding_precision::int) class_average
+        round(avg(CASE WHEN grade.status='scored' THEN (grade.score/assessment.maximum_score)*COALESCE(snapshot.scale_max,settings.scale_max) END),COALESCE(snapshot.rounding_precision,settings.rounding_precision)::int) class_average
         FROM assessments assessment JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
         JOIN classes class ON class.id=assignment.class_id AND class.school_id=assessment.school_id JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=assessment.school_id
         JOIN users teacher ON teacher.id=assignment.teacher_id AND teacher.school_id=assessment.school_id JOIN assessment_types type ON type.id=assessment.assessment_type_id AND type.school_id=assessment.school_id
-        JOIN grading_settings settings ON settings.school_id=assessment.school_id LEFT JOIN grades grade ON grade.assessment_id=assessment.id AND grade.school_id=assessment.school_id
+        JOIN grading_settings settings ON settings.school_id=assessment.school_id
+        LEFT JOIN LATERAL (SELECT publication.scale_max,publication.rounding_precision,publication.subject_coefficient FROM assessment_publication_snapshots publication WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
+        LEFT JOIN grades grade ON grade.assessment_id=assessment.id AND grade.school_id=assessment.school_id
         WHERE assessment.school_id=$1 AND ($2::uuid IS NULL OR assessment.academic_year_id=$2) AND ($3::uuid IS NULL OR assessment.academic_period_id=$3)
           AND ($4::uuid IS NULL OR assignment.class_id=$4) AND ($5::uuid IS NULL OR assignment.subject_id=$5) AND ($6::uuid IS NULL OR assignment.teacher_id=$6)
           AND ($7::text IS NULL OR assessment.status=$7)
-        GROUP BY assessment.id,assignment.id,class.id,subject.id,teacher.id,type.id,settings.id
+        GROUP BY assessment.id,assignment.id,class.id,subject.id,teacher.id,type.id,settings.id,snapshot.scale_max,snapshot.rounding_precision,snapshot.subject_coefficient
         ORDER BY assessment.assessment_date DESC,assessment.created_at DESC LIMIT $8 OFFSET $9`, [me.schoolId, academicYearId, academicPeriodId, classId, subjectId, teacherId, status, limit, offset])).rows;
       json(res, 200, rows); return true;
     }
@@ -224,14 +255,52 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         const [from, to] = transitions[action], accepted = from.split(",");
         if (!accepted.includes(checked.row.status)) { await client.query("ROLLBACK"); json(res, 409, { error: "Transition d’état impossible pour cette évaluation" }); return true; }
         if (["lock", "reopen"].includes(action) && !["owner", "director"].includes(me.role)) { await client.query("ROLLBACK"); json(res, 403, { error: "Action réservée à la direction" }); return true; }
-        const reason = action === "reopen" ? safeText(input.reason, { min: 8, max: 500 }) : null;
+        let reason = action === "reopen" || (action === "cancel" && checked.row.status === "published") ? safeText(input.reason, { min: 8, max: 500 }) : null;
+        let publicationSummary = null;
+        if (action === "publish") {
+          publicationSummary = (await client.query(`SELECT count(enrollment.id)::int total,
+            count(*) FILTER(WHERE grade.status='scored')::int scored,count(*) FILTER(WHERE grade.status='absent')::int absent,
+            count(*) FILTER(WHERE grade.status='excused')::int excused,count(*) FILTER(WHERE grade.status='exempt')::int exempt,
+            count(*) FILTER(WHERE grade.id IS NULL OR grade.status='pending')::int pending
+            FROM enrollments enrollment LEFT JOIN grades grade ON grade.school_id=enrollment.school_id AND grade.assessment_id=$1 AND grade.student_id=enrollment.student_id
+            WHERE enrollment.school_id=$2 AND enrollment.academic_year_id=$3 AND enrollment.class_id=$4 AND enrollment.status IN ('active','completed') AND enrollment.enrolled_at<=$5`,
+          [id, me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.assessment_date])).rows[0];
+          if (publicationSummary.pending > 0) {
+            if (!hasPermission(me.role, "assessments.publish_with_pending")) { await client.query("ROLLBACK"); json(res, 403, { error: "La publication avec des notes en attente est réservée à la direction", publicationSummary }); return true; }
+            if (input.confirmPending !== true) { await client.query("ROLLBACK"); json(res, 409, { error: "Confirmez explicitement la publication avec des élèves en attente", publicationSummary, confirmationRequired: true }); return true; }
+            reason = safeText(input.reason, { min: 8, max: 500 });
+          }
+          const snapshot = (await client.query(`INSERT INTO assessment_publication_snapshots(
+              school_id,academic_year_id,academic_period_id,class_id,subject_id,assessment_id,version,scale_max,rounding_precision,
+              absence_policy,missing_grade_policy,subject_coefficient,assessment_coefficient,calculation_version,effective_from,published_by,reason,previous_snapshot_id)
+            SELECT assessment.school_id,assessment.academic_year_id,assessment.academic_period_id,assignment.class_id,assignment.subject_id,assessment.id,
+              COALESCE((SELECT max(version)+1 FROM assessment_publication_snapshots old WHERE old.school_id=assessment.school_id AND old.assessment_id=assessment.id),1),
+              policy.scale_max,policy.rounding_precision,policy.absence_policy,policy.missing_grade_policy,subject_coefficient.coefficient,assessment.coefficient,1,
+              GREATEST(policy.effective_from,subject_coefficient.effective_from),$3,$4,
+              (SELECT old.id FROM assessment_publication_snapshots old WHERE old.school_id=assessment.school_id AND old.assessment_id=assessment.id ORDER BY old.version DESC LIMIT 1)
+            FROM assessments assessment JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
+            JOIN LATERAL (SELECT * FROM grading_policy_versions policy WHERE policy.school_id=assessment.school_id AND policy.academic_year_id=assessment.academic_year_id ORDER BY policy.version DESC LIMIT 1) policy ON true
+            JOIN LATERAL (SELECT * FROM subject_coefficient_versions coefficient WHERE coefficient.school_id=assessment.school_id AND coefficient.academic_year_id=assessment.academic_year_id AND coefficient.class_id=assignment.class_id AND coefficient.subject_id=assignment.subject_id ORDER BY coefficient.version DESC LIMIT 1) subject_coefficient ON true
+            WHERE assessment.school_id=$1 AND assessment.id=$2 RETURNING id,version`, [me.schoolId, id, me.sub, reason])).rows[0];
+          if (!snapshot) throw new Error("missing_grading_snapshot");
+          await client.query(`INSERT INTO grade_versions(school_id,grade_id,assessment_id,student_id,publication_snapshot_id,version,status,score,normalized_score,comment,reason,changed_by)
+            SELECT grade.school_id,grade.id,grade.assessment_id,grade.student_id,$3,1,grade.status,grade.score,
+              CASE WHEN grade.status='scored' THEN round((grade.score/assessment.maximum_score)*snapshot.scale_max,6) ELSE NULL END,grade.comment,$4,$5
+            FROM grades grade JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
+            JOIN assessment_publication_snapshots snapshot ON snapshot.id=$3 AND snapshot.school_id=grade.school_id
+            WHERE grade.school_id=$1 AND grade.assessment_id=$2 ON CONFLICT(school_id,grade_id,version) DO NOTHING`, [me.schoolId, id, snapshot.id, reason, me.sub]);
+        }
         const row = (await client.query(`UPDATE assessments SET status=$1,
           published_at=CASE WHEN $1='published' AND published_at IS NULL THEN now() ELSE published_at END,
           published_by=CASE WHEN $1='published' AND published_by IS NULL THEN $2 ELSE published_by END,
-          locked_at=CASE WHEN $1='locked' THEN now() WHEN $3='reopen' THEN NULL ELSE locked_at END,
-          locked_by=CASE WHEN $1='locked' THEN $2 WHEN $3='reopen' THEN NULL ELSE locked_by END,
-          updated_by=$2,updated_at=now(),version=version+1 WHERE id=$4 AND school_id=$5 RETURNING id,status,published_at,locked_at,version,updated_at`, [to, me.sub, action, id, me.schoolId])).rows[0];
-        await audit(client, me, `assessment.${action === "publish" ? "published" : action === "lock" ? "locked" : action === "reopen" ? "reopened" : "cancelled"}`, "assessment", id, { previousStatus: checked.row.status, reason });
+          locked_at=CASE WHEN $1='locked' THEN now() WHEN $3 IN ('reopen','cancel') THEN NULL ELSE locked_at END,
+          locked_by=CASE WHEN $1='locked' THEN $2 WHEN $3 IN ('reopen','cancel') THEN NULL ELSE locked_by END,
+          cancellation_reason=CASE WHEN $3='cancel' THEN $6 ELSE cancellation_reason END,
+          updated_by=$2,updated_at=now(),version=version+1 WHERE id=$4 AND school_id=$5 RETURNING id,status,published_at,locked_at,version,updated_at`, [to, me.sub, action, id, me.schoolId, reason])).rows[0];
+        await client.query(`INSERT INTO assessment_events(school_id,assessment_id,event_type,previous_status,new_status,changed_by,reason,version,previous_event_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,(SELECT id FROM assessment_events WHERE school_id=$1 AND assessment_id=$2 ORDER BY version DESC LIMIT 1))`,
+        [me.schoolId, id, action === "publish" ? "published" : action === "lock" ? "locked" : action === "reopen" ? "reopened" : "cancelled", checked.row.status, to, me.sub, reason, row.version]);
+        await audit(client, me, `assessment.${action === "publish" ? "published" : action === "lock" ? "locked" : action === "reopen" ? "reopened" : "cancelled"}`, "assessment", id, { previousStatus: checked.row.status, reason, publicationSummary });
         await client.query("COMMIT"); json(res, 200, row);
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
       return true;
@@ -277,7 +346,7 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         [me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.assessment_date, [...seen]])).rows;
         if (roster.length !== normalized.length) { await client.query("ROLLBACK"); json(res, 400, { error: "Un élève ne fait pas partie de cette classe pour cette évaluation" }); return true; }
         const enrollmentByStudent = new Map(roster.map((row) => [row.student_id, row.enrollment_id]));
-        const existing = (await client.query("SELECT id,student_id,status,score,version FROM grades WHERE school_id=$1 AND assessment_id=$2 AND student_id=ANY($3::uuid[]) FOR UPDATE", [me.schoolId, assessmentId, [...seen]])).rows;
+        const existing = (await client.query("SELECT id,student_id,status,score,comment,version FROM grades WHERE school_id=$1 AND assessment_id=$2 AND student_id=ANY($3::uuid[]) FOR UPDATE", [me.schoolId, assessmentId, [...seen]])).rows;
         const existingByStudent = new Map(existing.map((row) => [row.student_id, row]));
         for (const row of normalized) {
           const current = existingByStudent.get(row.student_id);
@@ -290,11 +359,20 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
           ON CONFLICT(school_id,assessment_id,student_id) DO UPDATE SET enrollment_id=excluded.enrollment_id,status=excluded.status,score=excluded.score,comment=excluded.comment,
             updated_by=$4,updated_at=now(),version=grades.version+1
           RETURNING id,student_id,status,score,normalized_score,comment,version,updated_at`, [JSON.stringify(normalized), me.schoolId, assessmentId, me.sub])).rows;
-        const changes = rows.map((row) => ({ grade_id: row.id, previous_status: existingByStudent.get(row.student_id)?.status || null,
-          new_status: row.status, previous_score: existingByStudent.get(row.student_id)?.score ?? null, new_score: row.score }));
-        await client.query(`WITH changes AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(grade_id uuid,previous_status text,new_status text,previous_score numeric,new_score numeric))
-          INSERT INTO grade_events(school_id,grade_id,previous_status,new_status,previous_score,new_score,changed_by,reason)
-          SELECT $2,grade_id,previous_status,new_status,previous_score,new_score,$3,$4 FROM changes`, [JSON.stringify(changes), me.schoolId, me.sub, reason]);
+        const changes = rows.map((row) => ({ grade_id: row.id, student_id: row.student_id, previous_status: existingByStudent.get(row.student_id)?.status || null,
+          new_status: row.status, previous_score: existingByStudent.get(row.student_id)?.score ?? null, new_score: row.score,
+          previous_comment: existingByStudent.get(row.student_id)?.comment ?? null, new_comment: row.comment, version: row.version }));
+        await client.query(`WITH changes AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(grade_id uuid,student_id uuid,previous_status text,new_status text,previous_score numeric,new_score numeric,previous_comment text,new_comment text,version integer))
+          INSERT INTO grade_events(school_id,grade_id,assessment_id,student_id,previous_status,new_status,previous_score,new_score,previous_comment,new_comment,changed_by,reason,version,previous_event_id)
+          SELECT $2,grade_id,$3,student_id,previous_status,new_status,previous_score,new_score,previous_comment,new_comment,$4,$5,version,
+            (SELECT event.id FROM grade_events event WHERE event.school_id=$2 AND event.grade_id=changes.grade_id ORDER BY event.id DESC LIMIT 1) FROM changes`, [JSON.stringify(changes), me.schoolId, assessmentId, me.sub, reason]);
+        if (correction) await client.query(`INSERT INTO grade_versions(school_id,grade_id,assessment_id,student_id,publication_snapshot_id,version,status,score,normalized_score,comment,reason,changed_by,previous_version_id)
+          SELECT grade.school_id,grade.id,grade.assessment_id,grade.student_id,snapshot.id,COALESCE(previous.version,0)+1,grade.status,grade.score,
+            CASE WHEN grade.status='scored' THEN round((grade.score/assessment.maximum_score)*snapshot.scale_max,6) ELSE NULL END,grade.comment,$4,$5,previous.id
+          FROM grades grade JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
+          JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=grade.school_id AND publication.assessment_id=grade.assessment_id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
+          LEFT JOIN LATERAL (SELECT old.id,old.version FROM grade_versions old WHERE old.school_id=grade.school_id AND old.grade_id=grade.id ORDER BY old.version DESC LIMIT 1) previous ON true
+          WHERE grade.school_id=$1 AND grade.assessment_id=$2 AND grade.id=ANY($3::uuid[])`, [me.schoolId, assessmentId, rows.map((row) => row.id), reason, me.sub]);
         await audit(client, me, correction ? "grades.batch_corrected" : "grades.batch_saved", "assessment", assessmentId, { count: rows.length, reason: reason || undefined });
         await client.query("COMMIT"); json(res, 200, { saved: rows.length, grades: rows });
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
@@ -308,7 +386,7 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
       const comment = input.comment ? safeText(input.comment, { max: 1000 }) : null, client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const current = (await client.query(`SELECT grade.id,grade.status,grade.score,grade.version,assessment.id assessment_id,assessment.status assessment_status,
+        const current = (await client.query(`SELECT grade.id,grade.student_id,grade.status,grade.score,grade.comment,grade.version,assessment.id assessment_id,assessment.status assessment_status,
           assignment.teacher_id FROM grades grade JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
           JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
           WHERE grade.id=$1 AND grade.school_id=$2 FOR UPDATE OF grade,assessment`, [id, me.schoolId])).rows[0];
@@ -318,7 +396,16 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         if (current.assessment_status !== "published") { await client.query("ROLLBACK"); json(res, 409, { error: "La correction exige une évaluation publiée et non verrouillée" }); return true; }
         if (current.version !== expectedVersion) { await client.query("ROLLBACK"); json(res, 409, { error: "Ces notes ont été modifiées par un autre utilisateur. Rechargez les données avant de continuer." }); return true; }
         const row = (await client.query("UPDATE grades SET status=$1,score=$2,comment=$3,updated_by=$4,updated_at=now(),version=version+1 WHERE id=$5 AND school_id=$6 RETURNING id,status,score,normalized_score,comment,version,updated_at", [status, score, comment, me.sub, id, me.schoolId])).rows[0];
-        await client.query("INSERT INTO grade_events(school_id,grade_id,previous_status,new_status,previous_score,new_score,changed_by,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [me.schoolId, id, current.status, status, current.score, score, me.sub, reason]);
+        await client.query(`INSERT INTO grade_events(school_id,grade_id,assessment_id,student_id,previous_status,new_status,previous_score,new_score,previous_comment,new_comment,changed_by,reason,version,previous_event_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,(SELECT event.id FROM grade_events event WHERE event.school_id=$1 AND event.grade_id=$2 ORDER BY event.id DESC LIMIT 1))`,
+        [me.schoolId, id, current.assessment_id, current.student_id, current.status, status, current.score, score, current.comment, comment, me.sub, reason, row.version]);
+        await client.query(`INSERT INTO grade_versions(school_id,grade_id,assessment_id,student_id,publication_snapshot_id,version,status,score,normalized_score,comment,reason,changed_by,previous_version_id)
+          SELECT grade.school_id,grade.id,grade.assessment_id,grade.student_id,snapshot.id,COALESCE(previous.version,0)+1,grade.status,grade.score,
+            CASE WHEN grade.status='scored' THEN round((grade.score/assessment.maximum_score)*snapshot.scale_max,6) ELSE NULL END,grade.comment,$3,$4,previous.id
+          FROM grades grade JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
+          JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=grade.school_id AND publication.assessment_id=grade.assessment_id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
+          LEFT JOIN LATERAL (SELECT old.id,old.version FROM grade_versions old WHERE old.school_id=grade.school_id AND old.grade_id=grade.id ORDER BY old.version DESC LIMIT 1) previous ON true
+          WHERE grade.school_id=$1 AND grade.id=$2`, [me.schoolId, id, reason, me.sub]);
         await audit(client, me, "grade.corrected", "grade", id, { reason, assessmentId: current.assessment_id }); await client.query("COMMIT"); json(res, 200, row);
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
       return true;
@@ -347,14 +434,15 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         const stats = (await pool.query(`SELECT count(enrollment.id)::int student_count,count(grade.id)::int entered_count,
           count(*) FILTER(WHERE grade.status='scored')::int scored_count,count(*) FILTER(WHERE grade.status='absent')::int absent_count,
           count(*) FILTER(WHERE grade.status='exempt')::int exempt_count,count(*) FILTER(WHERE grade.id IS NULL OR grade.status='pending')::int missing_count,
-          round(avg(grade.normalized_score) FILTER(WHERE grade.status='scored'),settings.rounding_precision::int) average,
-          min(grade.normalized_score) FILTER(WHERE grade.status='scored') minimum,max(grade.normalized_score) FILTER(WHERE grade.status='scored') maximum
-          FROM enrollments enrollment JOIN grading_settings settings ON settings.school_id=enrollment.school_id
+          round(avg((grade.score/assessment.maximum_score)*snapshot.scale_max) FILTER(WHERE grade.status='scored'),snapshot.rounding_precision::int) average,
+          min((grade.score/assessment.maximum_score)*snapshot.scale_max) FILTER(WHERE grade.status='scored') minimum,max((grade.score/assessment.maximum_score)*snapshot.scale_max) FILTER(WHERE grade.status='scored') maximum
+          FROM enrollments enrollment JOIN assessments assessment ON assessment.id=$1 AND assessment.school_id=enrollment.school_id
+          JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
           LEFT JOIN grades grade ON grade.school_id=enrollment.school_id AND grade.assessment_id=$1 AND grade.student_id=enrollment.student_id
           WHERE enrollment.school_id=$2 AND enrollment.academic_year_id=$3 AND enrollment.class_id=$4 AND enrollment.status IN ('active','completed') AND enrollment.enrolled_at<=$5
-          GROUP BY settings.id`, [assessmentId, me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.assessment_date])).rows[0];
-        const distribution = (await pool.query(`SELECT LEAST(4,floor((grade.normalized_score/settings.scale_max)*5))::int bucket,count(*)::int total
-          FROM grades grade JOIN grading_settings settings ON settings.school_id=grade.school_id
+          GROUP BY snapshot.id`, [assessmentId, me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.assessment_date])).rows[0];
+        const distribution = (await pool.query(`SELECT LEAST(4,floor((grade.score/assessment.maximum_score)*5))::int bucket,count(*)::int total
+          FROM grades grade JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
           WHERE grade.school_id=$1 AND grade.assessment_id=$2 AND grade.status='scored' GROUP BY bucket ORDER BY bucket`, [me.schoolId, assessmentId])).rows;
         report = { scope, assessment: checked.row, summary: stats || { student_count: 0, entered_count: 0, scored_count: 0, absent_count: 0, exempt_count: 0, missing_count: 0, average: null, minimum: null, maximum: null }, distribution };
       } else {
@@ -389,10 +477,13 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
       const exists = (await pool.query("SELECT 1 FROM students WHERE id=$1 AND school_id=$2", [studentId, me.schoolId])).rowCount;
       if (!exists) { json(res, 404, { error: "Élève introuvable" }); return true; }
       const rows = await reportRows(me, { academicPeriodId, studentId });
-      const assessments = (await pool.query(`SELECT assessment.id,assessment.title,assessment.assessment_date,assessment.maximum_score,assessment.coefficient,
-        assessment.status assessment_status,subject.name subject_name,grade.status,grade.score,grade.normalized_score,grade.comment
+      const assessments = (await pool.query(`SELECT assessment.id,assessment.title,assessment.assessment_date,assessment.maximum_score,snapshot.assessment_coefficient coefficient,
+        assessment.status assessment_status,subject.name subject_name,grade.status,grade.score,
+        CASE WHEN grade.status='scored' THEN round((grade.score/assessment.maximum_score)*snapshot.scale_max,6) ELSE NULL END normalized_score,
+        snapshot.scale_max,grade.comment
         FROM assessments assessment JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
         JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=assessment.school_id
+        JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
         LEFT JOIN grades grade ON grade.assessment_id=assessment.id AND grade.school_id=assessment.school_id AND grade.student_id=$3
         WHERE assessment.school_id=$1 AND assessment.academic_period_id=$2 AND assessment.status IN('published','locked')
           AND ($4::uuid IS NULL OR assignment.teacher_id=$4) ORDER BY assessment.assessment_date,subject.name,assessment.title`, [me.schoolId, academicPeriodId, studentId, me.role === "teacher" ? me.sub : null])).rows;

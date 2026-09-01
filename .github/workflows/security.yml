@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825 # PostgreSQL 16.15 (bookworm)
         env:
           POSTGRES_USER: scolaris
           POSTGRES_PASSWORD: scolaris_test_only
@@ -27,15 +27,17 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://scolaris:scolaris_test_only@127.0.0.1:5432/scolaris_test
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.20.0
           cache: npm
           cache-dependency-path: api/package-lock.json
       - run: npm ci --prefix api
+      - run: npm run verify:toolchain
+      - run: npm run verify:lifecycle
       - run: npm run security:secrets
       - run: npm run security:history
       - run: npm run lint
@@ -50,8 +52,8 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
