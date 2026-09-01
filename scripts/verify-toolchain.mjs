@@ -6,6 +6,7 @@ export const STRICT_NODE = "24.20.0";
 export const REQUIRED_NPM = "11.19.1";
 export const MANAGED_NODE_RANGE = ">=24.19.0 <25";
 export const MANAGED_NPM_RANGE = ">=11.17.0 <12";
+const VERCEL_ENVIRONMENTS = new Set(["development", "preview", "production"]);
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,6 +20,14 @@ function vercelNodeCompatible(value) {
   if (!parsed) return false;
   const [major, minor] = parsed;
   return major === 24 && minor >= 19;
+}
+
+export function resolveToolchainMode({ mode, lifecycleEvent, vercel, vercelEnv }) {
+  if (mode) return { mode, source: "explicit" };
+  if (lifecycleEvent === "preinstall" && vercel === "1" && VERCEL_ENVIRONMENTS.has(vercelEnv)) {
+    return { mode: "vercel", source: `vercel-system:${vercelEnv}` };
+  }
+  return { mode: "", source: "unset" };
 }
 
 export function evaluateToolchain({ mode, nodeVersion, npmVersion }) {
@@ -67,14 +76,21 @@ function run() {
   const nodeVersion = process.version.replace(/^v/, "");
   const npmUserAgent = process.env.npm_config_user_agent || "";
   const npmVersion = npmUserAgent.match(/(?:^|\s)npm\/([^\s]+)/)?.[1] || process.env.npm_version || "";
-  const mode = process.env.SCOLARIS_TOOLCHAIN_MODE || "";
-  const errors = verifyRepository({ mode, nodeVersion, npmVersion });
+  const resolvedMode = resolveToolchainMode({
+    mode: process.env.SCOLARIS_TOOLCHAIN_MODE || "",
+    lifecycleEvent: process.env.npm_lifecycle_event || "",
+    vercel: process.env.VERCEL || "",
+    vercelEnv: process.env.VERCEL_ENV || "",
+  });
+  const errors = verifyRepository({ mode: resolvedMode.mode, nodeVersion, npmVersion });
   if (errors.length) {
     for (const error of errors) console.error(`toolchain_guard_failed: ${error}`);
     process.exitCode = 1;
     return;
   }
-  console.log(`toolchain_guard_ok mode=${mode} node=${nodeVersion} npm=${npmVersion} argon2=0.45.1`);
+  console.log(
+    `toolchain_guard_ok mode=${resolvedMode.mode} source=${resolvedMode.source} node=${nodeVersion} npm=${npmVersion} argon2=0.45.1`,
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) run();
