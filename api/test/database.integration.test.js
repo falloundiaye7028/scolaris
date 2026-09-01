@@ -265,6 +265,11 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await request(`/api/attendance/sessions/${callSession.id}/records`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: m3SchoolBStudent, status: "present" }] }) })).status, 400);
   const invalidDocument = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "faux.pdf", contentType: "application/pdf", base64: Buffer.from("not a pdf").toString("base64") }) });
   assert.equal(invalidDocument.status, 400);
+  const forbiddenDocumentType = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "justificatif.txt", contentType: "text/plain", base64: Buffer.from("texte fictif").toString("base64") }) });
+  assert.equal(forbiddenDocumentType.status, 400);
+  const oversizedPdf = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20); oversizedPdf.write("%PDF-");
+  const oversizedDocument = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "trop-grand.pdf", contentType: "application/pdf", base64: oversizedPdf.toString("base64") }) });
+  assert.equal(oversizedDocument.status, 413);
   const documentResponse = await request("/api/attendance/justifications", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: secondStudent.id, name: "justificatif.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4\n% justificatif fictif\n").toString("base64") }) });
   assert.equal(documentResponse.status, 201);
   const attendanceDocument = await documentResponse.json();

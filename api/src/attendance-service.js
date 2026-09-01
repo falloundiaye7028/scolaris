@@ -212,7 +212,7 @@ export function createAttendanceRouter({ pool, body, json, csv, binary, identifi
       return true;
     }
     if (route === "POST /api/attendance/justifications") {
-      const input = await body(req), studentId = identifier(input.studentId), name = safeText(input.name, { min: 1, max: 180, pattern: /^[^\\/\0]+$/ }), contentType = oneOf(input.contentType, ["application/pdf", "image/jpeg", "image/png"]);
+      const input = await body(req, { maxStringLength: 2_800_000 }), studentId = identifier(input.studentId), name = safeText(input.name, { min: 1, max: 180, pattern: /^[^\\/\0]+$/ }), contentType = oneOf(input.contentType, ["application/pdf", "image/jpeg", "image/png"]);
       if (typeof input.base64 !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64)) throw Error("invalid_attendance_document");
       const content = Buffer.from(input.base64, "base64"); if (!content.length || content.length > 2 * 1024 * 1024) throw Error("attendance_document_too_large");
       const signatureOk = contentType === "application/pdf" ? content.subarray(0, 5).toString() === "%PDF-" : contentType === "image/png" ? content.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff;

@@ -111,21 +111,21 @@ export function quoteCsv(value) {
   return `"${safeCsvValue(value).replaceAll('"', '""')}"`;
 }
 
-export function validateJsonValue(value, depth = 0) {
+export function validateJsonValue(value, depth = 0, { maxStringLength = 10_000 } = {}) {
   if (depth > 8) throw new Error("invalid_body");
   if (typeof value === "string") {
-    if (value.length > 10_000 || value.includes("\0")) throw new Error("invalid_body");
+    if (value.length > maxStringLength || value.includes("\0")) throw new Error("invalid_body");
     return;
   }
   if (Array.isArray(value)) {
     if (value.length > 2_000) throw new Error("invalid_body");
-    value.forEach((item) => validateJsonValue(item, depth + 1));
+    value.forEach((item) => validateJsonValue(item, depth + 1, { maxStringLength }));
     return;
   }
   if (value && typeof value === "object") {
     for (const [key, item] of Object.entries(value)) {
       if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error("invalid_body");
-      validateJsonValue(item, depth + 1);
+      validateJsonValue(item, depth + 1, { maxStringLength });
     }
   }
 }

@@ -73,6 +73,9 @@ test("les exports neutralisent les formules CSV", () => {
 test("la validation JSON refuse les charges dangereuses", () => {
   assert.throws(() => validateJsonValue({ value: "a\0b" }), /invalid_body/);
   assert.throws(() => validateJsonValue({ ["__proto__"]: "x" }), /invalid_body/);
+  assert.throws(() => validateJsonValue({ value: "a".repeat(10_001) }), /invalid_body/);
+  assert.doesNotThrow(() => validateJsonValue({ base64: "a".repeat(10_001) }, 0, { maxStringLength: 20_000 }));
+  assert.throws(() => validateJsonValue({ base64: "a\0b" }, 0, { maxStringLength: 20_000 }), /invalid_body/);
   assert.doesNotThrow(() => validateJsonValue({ name: "<script>alert(1)</script>", special: "O'Reilly & école" }));
 });
 

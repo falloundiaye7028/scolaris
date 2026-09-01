@@ -65,7 +65,7 @@ const commonHeaders = {'strict-transport-security':'max-age=63072000; includeSub
 const json = (res,status,data,headers={}) => { res.writeHead(status,{'content-type':'application/json; charset=utf-8',...commonHeaders,...headers}); res.end(status===204?'':JSON.stringify(data)); };
 const csv = (res,name,rows) => { const output=rows.map(r=>r.map(quoteCsv).join(',')).join('\r\n'); res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="${name}"`,...commonHeaders}); res.end('\ufeff'+output); };
 const binary = (res,status,data,contentType,name) => { res.writeHead(status,{'content-type':contentType,'content-length':data.length,'content-disposition':`inline; filename="${name.replace(/[^a-zA-Z0-9._-]/g,'_')}"`,...commonHeaders});res.end(data); };
-const body = async req => { if(!String(req.headers['content-type']||'').toLowerCase().startsWith('application/json'))throw Error('unsupported_media');let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>4_500_000)throw Error('body_too_large')}let parsed={};try{parsed=raw?JSON.parse(raw):{}}catch{throw Error('invalid_body')}validateJsonValue(parsed);return parsed; };
+const body = async (req,validationOptions={}) => { if(!String(req.headers['content-type']||'').toLowerCase().startsWith('application/json'))throw Error('unsupported_media');let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>4_500_000)throw Error('body_too_large')}let parsed={};try{parsed=raw?JSON.parse(raw):{}}catch{throw Error('invalid_body')}validateJsonValue(parsed,0,validationOptions);return parsed; };
 const isPlatformAdmin = async me => Boolean(me?.platformAdmin);
 const auth = authService.authenticate;
 const createSession = authService.issueSession;
