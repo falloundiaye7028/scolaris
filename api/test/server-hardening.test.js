@@ -91,7 +91,11 @@ test("l'abonnement plateforme est administré uniquement par les routes privilé
 test("les routes privées ne sont ni publiques, ni indexables, ni mises en cache", () => {
   const appRewrite = vercel.rewrites.find((entry) => entry.source === "/app");
   const appHeaders = vercel.headers.find((entry) => entry.source === "/app");
-  assert.equal(vercel.installCommand, "npm ci --prefix api");
+  assert.equal(
+    vercel.installCommand,
+    "npm install --global npm@11.19.1 && npm --version && SCOLARIS_TOOLCHAIN_MODE=vercel npm run verify:toolchain && SCOLARIS_TOOLCHAIN_MODE=vercel npm ci --prefix api",
+  );
+  assert.equal(vercel.buildCommand, "SCOLARIS_TOOLCHAIN_MODE=vercel npm run build");
   assert.equal(vercel.outputDirectory, "web");
   assert.equal(appRewrite?.destination, "/api/private/app");
   assert.match(server, /\['\/app','\/api\/private\/app'\]\.includes\(url\.pathname\)/);
