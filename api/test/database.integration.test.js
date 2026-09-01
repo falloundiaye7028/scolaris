@@ -245,6 +245,9 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await request(`/api/lesson-sessions/${firstSession.id}`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", notes: "Séance annulée par la direction" }) })).status, 200);
   const m2TeacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "teacher-a@example.test", password: "MotDePasse#2026" }) });
   const m2TeacherCookie = m2TeacherLogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/dashboard", { headers: { cookie: m2TeacherCookie } })).status, 403);
+  assert.equal((await request("/api/invoices", { headers: { cookie: m2TeacherCookie } })).status, 403);
+  assert.equal((await request("/api/payments", { headers: { cookie: m2TeacherCookie } })).status, 403);
   const ownSchedule = await request("/api/timetable-entries", { headers: { cookie: m2TeacherCookie } });
   assert.equal(ownSchedule.status, 200);
   assert.ok((await ownSchedule.json()).every((entry) => entry.teacher_id === teacherA.id));

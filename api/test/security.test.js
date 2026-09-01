@@ -159,6 +159,39 @@ test("l'interface M4 couvre évaluations, notes, moyennes et mobile", async () =
   assert.match(privateHtml, /Absent[\s\S]*Absence justifiée[\s\S]*Dispensé[\s\S]*En attente/);
 });
 
+test("le landing et les capacités client suivent le rôle sans élargir le RBAC", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  const declarations = [
+    privateHtml.match(/const SCHOOL_DATA_STATUSES=[^;]+;/)?.[0],
+    privateHtml.match(/const FEATURE_ROLES=\{[^;]+;/)?.[0],
+    privateHtml.match(/function canUseFeature\([^}]+\}/)?.[0],
+    privateHtml.match(/function landingForUser\([^}]+\}/)?.[0],
+  ];
+  assert.ok(declarations.every(Boolean));
+  const context = {};
+  vm.runInNewContext(`${declarations.join("\n")};this.canUseFeature=canUseFeature;this.landingForUser=landingForUser`, context);
+  const profile = (role, extra = {}) => ({ role, school_status: "active", mfaEnrollmentRequired: false, mfaEnabled: false, platformAdmin: false, ...extra });
+  assert.equal(context.landingForUser(profile("teacher")), "grades");
+  assert.equal(context.landingForUser(profile("owner")), "dashboard");
+  assert.equal(context.landingForUser(profile("director")), "dashboard");
+  assert.equal(context.landingForUser(profile("owner", { platformAdmin: true })), "clients");
+  assert.equal(context.landingForUser(profile("teacher", { mfaEnrollmentRequired: true })), "security");
+  assert.equal(context.canUseFeature(profile("teacher"), "grades"), true);
+  assert.equal(context.canUseFeature(profile("teacher"), "attendance"), true);
+  assert.equal(context.canUseFeature(profile("teacher"), "timetable"), true);
+  assert.equal(context.canUseFeature(profile("teacher"), "students"), true);
+  assert.equal(context.canUseFeature(profile("teacher"), "studentsWrite"), false);
+  for (const feature of ["dashboard", "invoices", "payments", "overdue", "feeReports", "studentFinancial", "studentArchive"]) {
+    assert.equal(context.canUseFeature(profile("teacher"), feature), false);
+  }
+  assert.match(privateHtml, /data-feature="grades"/);
+  assert.match(privateHtml, /data-feature="attendance"/);
+  assert.match(privateHtml, /data-feature="timetable"/);
+  assert.match(privateHtml, /Consultation en lecture seule/);
+  assert.match(privateHtml, /canUseFeature\(user,'studentsWrite'\)/);
+  assert.match(privateHtml, /canUseFeature\(user,'studentFinancial'\)/);
+});
+
 test("l'échappement central neutralise scripts, attributs et caractères spéciaux", async () => {
   const source = await readFile(new URL("../../web/security.js", import.meta.url), "utf8");
   const context = { window: {} };
