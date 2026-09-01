@@ -4,6 +4,7 @@ import test from "node:test";
 
 const schema = await readFile(new URL("../src/schema.sql", import.meta.url), "utf8");
 const academicSchema = await readFile(new URL("../src/academic-schema.sql", import.meta.url), "utf8");
+const timetableSchema = await readFile(new URL("../src/timetable-schema.sql", import.meta.url), "utf8");
 const feeSchema = await readFile(new URL("../src/fee-schema.sql", import.meta.url), "utf8");
 
 test("la migration de sécurité est additive et révocable", () => {
@@ -92,4 +93,16 @@ test("les états et la projection académique restent explicites", () => {
   assert.match(academicSchema, /enrollments_status_check/);
   assert.match(academicSchema, /students\.class_name reste une projection de compatibilité/);
   assert.doesNotMatch(academicSchema, /DROP TABLE|DROP COLUMN/i);
+});
+
+test("M2 matérialise les affectations, créneaux et séances sans destruction", () => {
+  for (const table of ["subjects", "rooms", "teaching_assignments", "timetable_entries", "lesson_sessions"]) {
+    assert.match(timetableSchema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(timetableSchema, /CHECK\(start_time<end_time\)/);
+  assert.match(timetableSchema, /teaching_assignments_school_class_year_fkey/);
+  assert.match(timetableSchema, /timetable_entries_school_assignment_year_fkey/);
+  assert.match(timetableSchema, /lesson_sessions_school_assignment_year_fkey/);
+  assert.match(timetableSchema, /lesson session outside academic year/);
+  assert.doesNotMatch(timetableSchema, /DROP TABLE|DROP COLUMN/i);
 });

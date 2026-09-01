@@ -93,6 +93,10 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(hasPermission("accountant", "fee_adjustments.write"), false);
   assert.equal(hasPermission("teacher", "payments.write"), false);
   assert.equal(hasPermission("teacher", "billing.read"), false);
+  assert.equal(hasPermission("teacher", "timetable.read"), true);
+  assert.equal(hasPermission("teacher", "lesson_sessions.read"), true);
+  assert.equal(hasPermission("teacher", "timetable.manage"), false);
+  assert.equal(hasPermission("director", "rooms.manage"), true);
   assert.equal(hasPermission("unknown", "students.read"), false);
   assert.equal(permissionFor("POST", "/api/students"), "students.write");
   assert.equal(permissionFor("POST", "/api/fee-definitions"), "fee_definitions.write");
@@ -101,6 +105,11 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(permissionFor("POST", "/api/student-fee-payments"), "payments.write");
   assert.equal(permissionFor("GET", "/api/students/123/statement"), "billing.read");
   assert.equal(permissionFor("GET", "/api/exports/students.csv"), "exports.read");
+  assert.equal(permissionFor("GET", "/api/timetable-entries"), "timetable.read");
+  assert.equal(permissionFor("POST", "/api/timetable-entries"), "timetable.manage");
+  assert.equal(permissionFor("DELETE", "/api/rooms/123"), "rooms.manage");
+  assert.equal(permissionFor("GET", "/api/lesson-sessions"), "lesson_sessions.read");
+  assert.equal(permissionFor("PUT", "/api/lesson-sessions/123"), "lesson_sessions.manage");
 });
 
 test("l'échappement central neutralise scripts, attributs et caractères spéciaux", async () => {
@@ -202,6 +211,18 @@ test("l'interface financière couvre les frais annuels, les versements et la rem
   assert.match(privateHtml, /Rapports séparés par catégorie/);
   assert.match(privateHtml, /academicYearModal/);
   assert.match(privateHtml, /enrollmentModal/);
+});
+
+test("l'interface M2 propose les vues classe et enseignant avec un agenda mobile", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /data-view="timetable"/);
+  assert.match(privateHtml, /Vue classe/);
+  assert.match(privateHtml, /Vue enseignant/);
+  assert.match(privateHtml, /Affectation pédagogique/);
+  assert.match(privateHtml, /schedule-agenda/);
+  const mobileCss = privateHtml.match(/@media\(max-width:620px\)\{([^}]|\}(?!\s*@media))*$/m)?.[0] || privateHtml;
+  assert.match(mobileCss, /\.schedule-week\{display:none\}/);
+  assert.match(mobileCss, /\.schedule-agenda\{display:grid/);
 });
 
 test("le formulaire de connexion utilise POST et les attributs d'accessibilité attendus", async () => {

@@ -156,10 +156,10 @@ export function hasSpreadsheetFormula(value) {
 }
 
 const ROLE_PERMISSIONS = {
-  owner: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read"]),
-  director: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read"]),
+  owner: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage"]),
+  director: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage"]),
   accountant: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "billing.write", "payments.write", "reminders.write", "exports.read"]),
-  teacher: new Set(["students.read"]),
+  teacher: new Set(["students.read", "timetable.read", "lesson_sessions.read"]),
 };
 
 export function hasPermission(role, permission) {
@@ -169,12 +169,18 @@ export function hasPermission(role, permission) {
 export function permissionFor(method, pathname) {
   if (method === "GET") {
     if (pathname.startsWith("/api/exports/")) return "exports.read";
+    if (pathname.startsWith("/api/rooms")) return "rooms.read";
+    if (pathname.startsWith("/api/lesson-sessions")) return "lesson_sessions.read";
+    if (pathname.startsWith("/api/timetable-entries") || pathname.startsWith("/api/teaching-assignments") || pathname.startsWith("/api/subjects") || pathname.startsWith("/api/teachers")) return "timetable.read";
     if (/^\/api\/students\/[^/]+\/statement$/.test(pathname)) return "billing.read";
     if (pathname.startsWith("/api/guardians")) return "guardians.read";
     if (pathname.startsWith("/api/reminders")) return "reminders.read";
     if (pathname.startsWith("/api/invoices") || pathname.startsWith("/api/fee-") || pathname.startsWith("/api/uniform-assignments") || pathname.startsWith("/api/reports/fees") || pathname.startsWith("/api/payments") || pathname.startsWith("/api/student-payments") || pathname.startsWith("/api/student-fee-payments") || pathname.startsWith("/api/receipts") || pathname.startsWith("/api/collections") || pathname.startsWith("/api/dashboard")) return "billing.read";
     return "students.read";
   }
+  if (pathname.startsWith("/api/rooms")) return "rooms.manage";
+  if (pathname.startsWith("/api/lesson-sessions")) return "lesson_sessions.manage";
+  if (pathname.startsWith("/api/timetable-entries") || pathname.startsWith("/api/teaching-assignments") || pathname.startsWith("/api/subjects")) return "timetable.manage";
   if (pathname.startsWith("/api/students") || pathname.startsWith("/api/guardians") || pathname.startsWith("/api/classes") || pathname.startsWith("/api/academic-years") || pathname.startsWith("/api/enrollments") || pathname.startsWith("/api/student-guardians")) return "students.write";
   if (pathname.startsWith("/api/fee-categories") || pathname.startsWith("/api/fee-definitions") || pathname.startsWith("/api/fee-assignments/preview") || pathname.startsWith("/api/fee-assignments/bulk")) return "fee_definitions.write";
   if (/^\/api\/fee-assignments\/[^/]+\/adjust$/.test(pathname) || /^\/api\/student-payments\/[^/]+\/cancel$/.test(pathname)) return "fee_adjustments.write";

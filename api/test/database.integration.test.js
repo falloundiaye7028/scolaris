@@ -187,6 +187,65 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal(guardianLinks.filter((link) => link.is_primary).length, 1);
   assert.equal(guardianLinks.find((link) => link.is_primary).guardian_id, secondaryGuardian.id);
 
+  // M2 — emploi du temps, affectations, conflits et séances matérialisées à la demande.
+  const teacherA = (await admin.query("SELECT id FROM users WHERE email='teacher-a@example.test'")).rows[0];
+  const teacherA2 = (await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Mme Fall','teacher-a2@example.test',$2,'teacher') RETURNING id", [schoolA, passwordHash])).rows[0];
+  const teacherB = (await admin.query("INSERT INTO users(school_id,name,email,password_hash,role) VALUES($1,'Enseignant B','teacher-b@example.test',$2,'teacher') RETURNING id", [schoolB, passwordHash])).rows[0];
+  const secondClass = await (await request("/api/classes", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, name: "6e B", level: "6e" }) })).json();
+  const math = await (await request("/api/subjects", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Mathématiques", code: "MATH" }) })).json();
+  const french = await (await request("/api/subjects", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Français", code: "FR" }) })).json();
+  const science = await (await request("/api/subjects", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Sciences", code: "SCI" }) })).json();
+  const room = await (await request("/api/rooms", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Salle 12", code: "S12", capacity: 40 }) })).json();
+  const inactiveRoom = await (await request("/api/rooms", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Laboratoire fermé", code: "LAB-X" }) })).json();
+  assert.equal((await request(`/api/rooms/${inactiveRoom.id}`, { method: "DELETE", headers: { cookie } })).status, 200);
+  const assignment = await (await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA.id, classId: currentClass.id, subjectId: math.id }) })).json();
+  const teacherConflictAssignment = await (await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA.id, classId: secondClass.id, subjectId: french.id }) })).json();
+  const classConflictAssignment = await (await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA2.id, classId: currentClass.id, subjectId: french.id }) })).json();
+  const roomConflictAssignment = await (await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA2.id, classId: secondClass.id, subjectId: science.id }) })).json();
+  const entryPayload = { academicYearId: currentYear.id, teachingAssignmentId: assignment.id, roomId: room.id, weekday: 1, startTime: "08:00", endTime: "10:00", effectiveFrom: "2026-09-01", effectiveTo: "2027-07-31" };
+  const firstEntryResponse = await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(entryPayload) });
+  assert.equal(firstEntryResponse.status, 201);
+  const firstEntry = await firstEntryResponse.json();
+  const teacherConflict = await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, teachingAssignmentId: teacherConflictAssignment.id, roomId: null, startTime: "09:00", endTime: "11:00" }) });
+  assert.equal(teacherConflict.status, 409);
+  assert.match((await teacherConflict.json()).error, /enseigne déjà/);
+  const classConflict = await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, teachingAssignmentId: classConflictAssignment.id, roomId: null, startTime: "08:30", endTime: "09:30" }) });
+  assert.equal(classConflict.status, 409);
+  assert.match((await classConflict.json()).error, /classe 6e A/);
+  const roomConflict = await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, teachingAssignmentId: roomConflictAssignment.id, startTime: "08:30", endTime: "09:30" }) });
+  assert.equal(roomConflict.status, 409);
+  assert.match((await roomConflict.json()).error, /Salle 12 est déjà occupée/);
+  const adjacentEntry = await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, startTime: "10:00", endTime: "11:00" }) });
+  assert.equal(adjacentEntry.status, 201);
+  assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, startTime: "11:00", endTime: "11:00" }) })).status, 400);
+  assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, roomId: inactiveRoom.id, startTime: "11:00", endTime: "12:00" }) })).status, 409);
+  const inactiveAssignment = await (await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA2.id, classId: secondClass.id, subjectId: french.id }) })).json();
+  assert.equal((await request(`/api/teaching-assignments/${inactiveAssignment.id}`, { method: "DELETE", headers: { cookie } })).status, 200);
+  assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, teachingAssignmentId: inactiveAssignment.id, roomId: null, startTime: "11:00", endTime: "12:00" }) })).status, 404);
+  assert.equal((await request("/api/teaching-assignments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, teacherId: teacherA.id, classId: nextClass.id, subjectId: math.id }) })).status, 404);
+  const schoolBRoom = (await admin.query("INSERT INTO rooms(school_id,name,code) VALUES($1,'Salle B','SB') RETURNING id", [schoolB])).rows[0];
+  assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ...entryPayload, roomId: schoolBRoom.id, startTime: "11:00", endTime: "12:00" }) })).status, 404);
+  await assert.rejects(
+    admin.query("INSERT INTO teaching_assignments(school_id,academic_year_id,teacher_id,class_id,subject_id) VALUES($1,$2,$3,$4,$5)", [schoolA, currentYear.id, teacherB.id, currentClass.id, math.id]),
+    (error) => error.code === "23503" || /requires a teacher/.test(error.message),
+  );
+  const generateSessions = await request("/api/lesson-sessions/generate", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, from: "2026-09-07", to: "2026-09-07" }) });
+  assert.equal(generateSessions.status, 201);
+  assert.equal((await generateSessions.json()).created, 2);
+  const generatedSessions = await (await request("/api/lesson-sessions?from=2026-09-07&to=2026-09-07", { headers: { cookie } })).json();
+  assert.equal(generatedSessions.length, 2);
+  const firstSession = generatedSessions.find((session) => session.timetable_entry_id === firstEntry.id);
+  const conflictingMove = await request(`/api/lesson-sessions/${firstSession.id}`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "reschedule", sessionDate: "2026-09-07", startTime: "09:30", endTime: "10:30", roomId: room.id }) });
+  assert.equal(conflictingMove.status, 409);
+  assert.equal((await request(`/api/lesson-sessions/${firstSession.id}`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "reschedule", sessionDate: "2026-09-07", startTime: "11:00", endTime: "12:00", roomId: room.id, title: "Mathématiques déplacées" }) })).status, 200);
+  assert.equal((await request(`/api/lesson-sessions/${firstSession.id}`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", notes: "Séance annulée par la direction" }) })).status, 200);
+  const m2TeacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "teacher-a@example.test", password: "MotDePasse#2026" }) });
+  const m2TeacherCookie = m2TeacherLogin.headers.get("set-cookie").split(";")[0];
+  const ownSchedule = await request("/api/timetable-entries", { headers: { cookie: m2TeacherCookie } });
+  assert.equal(ownSchedule.status, 200);
+  assert.ok((await ownSchedule.json()).every((entry) => entry.teacher_id === teacherA.id));
+  assert.equal((await request("/api/timetable-entries", { method: "POST", headers: { cookie: m2TeacherCookie, "content-type": "application/json" }, body: JSON.stringify(entryPayload) })).status, 403);
+
   const registrationDefinition = { academicYearId: currentYear.id, classId: currentClass.id, name: "Inscription annuelle", feeType: "registration", amountXof: 25_000, isMandatory: true };
   const registrationPreview = await request("/api/fee-assignments/preview", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: registrationDefinition, scope: "class", classId: currentClass.id, dueDate: "2026-09-15" }) });
   assert.equal(registrationPreview.status, 200);

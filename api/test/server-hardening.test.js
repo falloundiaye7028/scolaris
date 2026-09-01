@@ -4,6 +4,7 @@ import test from "node:test";
 
 const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
 const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
+const timetableService = await readFile(new URL("../src/timetable-service.js", import.meta.url), "utf8");
 const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
@@ -35,6 +36,17 @@ test("le domaine académique est isolé et l'année courante est transactionnell
   assert.match(academicService, /academic_year\.current_changed/);
   assert.match(academicService, /GET \/api\/enrollments/);
   assert.match(academicService, /UPDATE students AS student[\s\S]+year\.is_current=true/);
+});
+
+test("M2 sérialise les calendriers et explique les conflits", () => {
+  assert.match(server, /createTimetableRouter/);
+  assert.match(server, /timetable-schema\.sql/);
+  assert.match(timetableService, /pg_advisory_xact_lock/);
+  assert.match(timetableService, /entry\.start_time<\$7::time AND entry\.end_time>\$6::time/);
+  assert.match(timetableService, /enseigne déjà en/);
+  assert.match(timetableService, /est déjà occupée/);
+  assert.match(timetableService, /possède déjà un cours/);
+  assert.match(timetableService, /days > 62/);
 });
 
 test("l'abonnement plateforme est administré uniquement par les routes privilégiées", () => {
