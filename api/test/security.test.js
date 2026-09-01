@@ -97,6 +97,11 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(hasPermission("teacher", "lesson_sessions.read"), true);
   assert.equal(hasPermission("teacher", "timetable.manage"), false);
   assert.equal(hasPermission("director", "rooms.manage"), true);
+  assert.equal(hasPermission("owner", "attendance.reports"), true);
+  assert.equal(hasPermission("teacher", "attendance.mark"), true);
+  assert.equal(hasPermission("teacher", "attendance.update"), true);
+  assert.equal(hasPermission("teacher", "attendance.reports"), false);
+  assert.equal(hasPermission("accountant", "attendance.read"), false);
   assert.equal(hasPermission("unknown", "students.read"), false);
   assert.equal(permissionFor("POST", "/api/students"), "students.write");
   assert.equal(permissionFor("POST", "/api/fee-definitions"), "fee_definitions.write");
@@ -110,6 +115,20 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(permissionFor("DELETE", "/api/rooms/123"), "rooms.manage");
   assert.equal(permissionFor("GET", "/api/lesson-sessions"), "lesson_sessions.read");
   assert.equal(permissionFor("PUT", "/api/lesson-sessions/123"), "lesson_sessions.manage");
+  assert.equal(permissionFor("GET", "/api/attendance/sessions"), "attendance.read");
+  assert.equal(permissionFor("POST", "/api/attendance/sessions/123/records"), "attendance.mark");
+  assert.equal(permissionFor("POST", "/api/attendance/justifications"), "attendance.justify");
+  assert.equal(permissionFor("GET", "/api/attendance/reports"), "attendance.reports");
+});
+
+test("l'interface M3 conserve des actions textuelles et une disposition mobile", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /data-view="attendance"/);
+  assert.match(privateHtml, /Marquer tous présents/);
+  assert.match(privateHtml, /Enregistrer l’appel/);
+  assert.match(privateHtml, /attendance-actions/);
+  assert.match(privateHtml, /@media\(max-width:620px\)[\s\S]*attendance-student/);
+  assert.match(privateHtml, /Présent[\s\S]*Absent[\s\S]*Retard[\s\S]*Justifié/);
 });
 
 test("l'échappement central neutralise scripts, attributs et caractères spéciaux", async () => {

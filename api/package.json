@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "migrate": "node src/migrate.js",
     "test": "node --test",
-    "lint": "node --check src/server.js && node --check src/academic-service.js && node --check src/timetable-service.js && node --check src/fee-service.js && node --check src/security.js && node --check src/subscriptions.js && node --check src/auth-security.js && node --check src/auth-service.js && node --check src/migrate.js",
+    "lint": "node --check src/server.js && node --check src/academic-service.js && node --check src/timetable-service.js && node --check src/attendance-service.js && node --check src/fee-service.js && node --check src/security.js && node --check src/subscriptions.js && node --check src/auth-security.js && node --check src/auth-service.js && node --check src/migrate.js",
     "typecheck": "npm run lint",
     "build": "npm run lint && npm test"
   },
