@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
 const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
@@ -23,8 +24,17 @@ test("déconnexion, expiration absolue et inactivité sont effectives côté ser
 test("le super-administrateur est explicite et les relations tenant sont vérifiées", () => {
   assert.doesNotMatch(server, /SELECT id FROM users ORDER BY created_at,id LIMIT 1/);
   assert.match(server, /is_platform_admin/);
-  assert.match(server, /EXISTS\(SELECT 1 FROM classes WHERE id=\$3 AND academic_year_id=\$4 AND school_id=\$1\)/);
+  assert.match(academicService, /EXISTS\(SELECT 1 FROM classes WHERE id=\$3 AND academic_year_id=\$4 AND school_id=\$1\)/);
   assert.match(server, /WHERE id=\$1 AND school_id=\$2 FOR UPDATE/);
+});
+
+test("le domaine académique est isolé et l'année courante est transactionnelle", () => {
+  assert.match(server, /createAcademicRouter/);
+  assert.match(server, /academic-schema\.sql/);
+  assert.match(academicService, /pg_advisory_xact_lock/);
+  assert.match(academicService, /academic_year\.current_changed/);
+  assert.match(academicService, /GET \/api\/enrollments/);
+  assert.match(academicService, /UPDATE students AS student[\s\S]+year\.is_current=true/);
 });
 
 test("l'abonnement plateforme est administré uniquement par les routes privilégiées", () => {

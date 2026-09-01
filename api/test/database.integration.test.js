@@ -143,6 +143,50 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   }
   assert.equal((await request("/api/enrollments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, classId: nextClass.id, academicYearId: nextYear.id }) })).status, 201);
 
+  const academicStudents = await (await request("/api/students", { headers: { cookie } })).json();
+  assert.equal(academicStudents.find((student) => student.id === schoolAStudent).class_name, "6e A");
+  const academicEnrollments = await (await request(`/api/enrollments?studentId=${schoolAStudent}`, { headers: { cookie } })).json();
+  assert.equal(academicEnrollments.length, 2);
+  assert.deepEqual(new Set(academicEnrollments.map((enrollment) => enrollment.academic_year)), new Set(["2026-2027", "2027-2028"]));
+
+  const switchToNextYear = await request(`/api/academic-years/${nextYear.id}/current`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(switchToNextYear.status, 200);
+  const yearsAfterSwitch = await (await request("/api/academic-years", { headers: { cookie } })).json();
+  assert.deepEqual(yearsAfterSwitch.filter((year) => year.is_current).map((year) => year.id), [nextYear.id]);
+  const studentsInNextYear = await (await request("/api/students", { headers: { cookie } })).json();
+  assert.equal(studentsInNextYear.find((student) => student.id === schoolAStudent).class_name, "5e A");
+  assert.equal((await request(`/api/academic-years/${currentYear.id}/current`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: "{}" })).status, 200);
+  const studentsBackInCurrentYear = await (await request("/api/students", { headers: { cookie } })).json();
+  assert.equal(studentsBackInCurrentYear.find((student) => student.id === schoolAStudent).class_name, "6e A");
+
+  await assert.rejects(
+    admin.query("INSERT INTO academic_years(school_id,label,starts_on,ends_on,is_current) VALUES($1,'Année courante concurrente','2025-09-01','2026-07-31',true)", [schoolA]),
+    (error) => error.code === "23505",
+  );
+  const schoolBYear = (await admin.query("INSERT INTO academic_years(school_id,label,starts_on,ends_on) VALUES($1,'2026-2027','2026-09-01','2027-07-31') RETURNING id", [schoolB])).rows[0];
+  await assert.rejects(
+    admin.query("INSERT INTO classes(school_id,academic_year_id,name) VALUES($1,$2,'Classe étrangère')", [schoolA, schoolBYear.id]),
+    (error) => error.code === "23503",
+  );
+  const schoolBClass = (await admin.query("INSERT INTO classes(school_id,academic_year_id,name) VALUES($1,$2,'Classe B') RETURNING id", [schoolB, schoolBYear.id])).rows[0];
+  await assert.rejects(
+    admin.query("INSERT INTO enrollments(school_id,student_id,class_id,academic_year_id) VALUES($1,$2,$3,$4)", [schoolA, schoolAStudent, schoolBClass.id, schoolBYear.id]),
+    (error) => error.code === "23503",
+  );
+  const schoolBGuardian = (await admin.query("INSERT INTO guardians(school_id,full_name) VALUES($1,'Responsable B') RETURNING id", [schoolB])).rows[0];
+  await assert.rejects(
+    admin.query("INSERT INTO student_guardians(school_id,student_id,guardian_id,relationship) VALUES($1,$2,$3,'parent')", [schoolA, schoolAStudent, schoolBGuardian.id]),
+    (error) => error.code === "23503",
+  );
+
+  const primaryGuardian = await (await request("/api/guardians", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ fullName: "Responsable principal", phone: "+221770000001" }) })).json();
+  const secondaryGuardian = await (await request("/api/guardians", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ fullName: "Responsable secondaire", phone: "+221770000002" }) })).json();
+  assert.equal((await request("/api/student-guardians", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, guardianId: primaryGuardian.id, relationship: "mère", isPrimary: true }) })).status, 201);
+  assert.equal((await request("/api/student-guardians", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, guardianId: secondaryGuardian.id, relationship: "père", isPrimary: true }) })).status, 201);
+  const guardianLinks = await (await request(`/api/student-guardians?studentId=${schoolAStudent}`, { headers: { cookie } })).json();
+  assert.equal(guardianLinks.filter((link) => link.is_primary).length, 1);
+  assert.equal(guardianLinks.find((link) => link.is_primary).guardian_id, secondaryGuardian.id);
+
   const registrationDefinition = { academicYearId: currentYear.id, classId: currentClass.id, name: "Inscription annuelle", feeType: "registration", amountXof: 25_000, isMandatory: true };
   const registrationPreview = await request("/api/fee-assignments/preview", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ definition: registrationDefinition, scope: "class", classId: currentClass.id, dueDate: "2026-09-15" }) });
   assert.equal(registrationPreview.status, 200);

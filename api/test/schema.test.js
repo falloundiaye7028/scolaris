@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const schema = await readFile(new URL("../src/schema.sql", import.meta.url), "utf8");
+const academicSchema = await readFile(new URL("../src/academic-schema.sql", import.meta.url), "utf8");
 const feeSchema = await readFile(new URL("../src/fee-schema.sql", import.meta.url), "utf8");
 
 test("la migration de sécurité est additive et révocable", () => {
@@ -73,4 +74,22 @@ test("les paiements scolaires ventilés restent séparés des abonnements platef
   assert.match(feeSchema, /student_payment_allocations/);
   assert.match(feeSchema, /CREATE OR REPLACE VIEW student_fee_payments/);
   assert.doesNotMatch(feeSchema, /student_payment_(?:batches|allocations)[\s\S]{0,200}platform_subscription_payments/);
+});
+
+test("la fondation académique impose l'intégrité multi-établissements", () => {
+  assert.match(academicSchema, /idx_academic_years_one_current/);
+  assert.match(academicSchema, /classes_school_academic_year_fkey/);
+  assert.match(academicSchema, /enrollments_school_student_fkey/);
+  assert.match(academicSchema, /enrollments_school_class_year_fkey/);
+  assert.match(academicSchema, /student_guardians ADD COLUMN IF NOT EXISTS school_id/);
+  assert.match(academicSchema, /student_guardians_school_student_fkey/);
+  assert.match(academicSchema, /student_guardians_school_guardian_fkey/);
+  assert.match(academicSchema, /idx_student_guardians_one_primary/);
+});
+
+test("les états et la projection académique restent explicites", () => {
+  assert.match(academicSchema, /students_status_check/);
+  assert.match(academicSchema, /enrollments_status_check/);
+  assert.match(academicSchema, /students\.class_name reste une projection de compatibilité/);
+  assert.doesNotMatch(academicSchema, /DROP TABLE|DROP COLUMN/i);
 });
