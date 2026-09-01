@@ -202,6 +202,100 @@ test("l'échappement central neutralise scripts, attributs et caractères spéci
   assert.equal(escapeHtml("École & O'Reilly"), "École &amp; O&#39;Reilly");
 });
 
+function focusNode({ connected = true, visible = true } = {}) {
+  return {
+    disabled: false,
+    hidden: false,
+    isConnected: connected,
+    focused: 0,
+    classList: { add() {}, remove() {}, contains() { return false; } },
+    closest() { return null; },
+    focus() { this.focused += 1; },
+    getAttribute() { return null; },
+    getClientRects() { return visible ? [{}] : []; },
+  };
+}
+
+async function modalFocusFixture() {
+  const source = await readFile(new URL("../../web/security.js", import.meta.url), "utf8");
+  const context = { window: {} };
+  vm.runInNewContext(source, context);
+  const modal = focusNode();
+  const fallback = focusNode();
+  const controller = context.window.ScolarisSecurity.createModalFocusController({ modal, getFallback: () => fallback });
+  return { controller, fallback, modal };
+}
+
+test("Escape, le bouton Fermer, le backdrop et le submit restaurent le déclencheur", async () => {
+  for (const closure of ["Escape", "bouton Fermer", "backdrop", "submit réussi"]) {
+    const { controller, modal } = await modalFocusFixture();
+    const trigger = focusNode();
+    controller.open(trigger);
+    assert.equal(modal.classList.contains("hidden"), false, `${closure}: ouverture`);
+    controller.close();
+    assert.equal(trigger.focused, 1, `${closure}: focus restauré`);
+  }
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /\$\('#closeModal'\)\.onclick=closeModal/);
+  assert.match(privateHtml, /e\.target===\$\('#modal'\)\)closeModal\(\)/);
+  assert.match(privateHtml, /e\.key==='Escape'[\s\S]*?closeModal\(\)/);
+  assert.match(privateHtml, /await submit\([\s\S]*?closeModal\(\)/);
+});
+
+test("un déclencheur supprimé utilise le fallback sans crash", async () => {
+  const { controller, fallback } = await modalFocusFixture();
+  const trigger = focusNode();
+  controller.open(trigger);
+  trigger.isConnected = false;
+  assert.doesNotThrow(() => controller.close());
+  assert.equal(fallback.focused, 1);
+});
+
+test("la fermeture nettoie la référence et deux ouvertures ne réutilisent pas un ancien focus", async () => {
+  const { controller, fallback } = await modalFocusFixture();
+  const first = focusNode();
+  const second = focusNode();
+  controller.open(first);
+  controller.close();
+  controller.close();
+  assert.equal(first.focused, 1);
+  assert.equal(fallback.focused, 1, "la seconde fermeture prouve que la référence a été nettoyée");
+  controller.open(first);
+  controller.open(second);
+  controller.close();
+  assert.equal(first.focused, 1);
+  assert.equal(second.focused, 1);
+});
+
+test("toutes les ouvertures directes et le nettoyage MFA utilisent le gestionnaire central", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /modalFocus\.capture\(element\)/);
+  assert.match(privateHtml, /function modalFocusFallback\(\)[\s\S]*?setAttribute\('tabindex','-1'\)/);
+  assert.match(privateHtml, /function openModal[\s\S]*?modalFocus\.open\(document\.activeElement\)/);
+  assert.match(privateHtml, /function showRecoveryCodes[\s\S]*?modalFocus\.open\(document\.activeElement\)/);
+  assert.match(privateHtml, /function closeModal\(\)\{if\(\$\('#modalTitle'\)\.textContent\.includes\('récupération'\)\)pendingRecoveryCodes=\[\];if\(\$\('#modalTitle'\)\.textContent\.includes\('vérification en deux étapes'\)\)pendingMfaSecret='';modalFocus\.close\(\)\}/);
+  const closeModal = privateHtml.match(/function closeModal\(\)\{[^}]+\}/)?.[0] || "";
+  assert.doesNotMatch(closeModal, /classList\.add\('hidden'\)/);
+});
+
+test("le contraste renforcé protège la date et les en-têtes de tableau", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  const hex = privateHtml.match(/--muted-strong:(#[0-9a-f]{6})/i)?.[1];
+  assert.equal(hex?.toLowerCase(), "#5f6f69");
+  assert.match(privateHtml, /\.eyebrow\{[^}]*color:var\(--muted-strong\)/);
+  assert.match(privateHtml, /th\{[^}]*color:var\(--muted-strong\)/);
+  const luminance = (color) => {
+    const channels = color.slice(1).match(/../g).map((value) => Number.parseInt(value, 16) / 255).map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const contrast = (foreground, background) => {
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  };
+  assert.ok(contrast(hex, "#f5f7f6") >= 4.8);
+  assert.ok(contrast(hex, "#fafcfb") >= 4.8);
+});
+
 test("le HTML public ne contient aucune interface ou donnée privée", async () => {
   const publicHtml = await readFile(new URL("../../web/index.html", import.meta.url), "utf8");
   const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
