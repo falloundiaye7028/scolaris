@@ -50,7 +50,7 @@ function clearChallengeCookie({ secure = true } = {}) {
   ].filter(Boolean).join("; ");
 }
 
-export function createAuthService({ pool, secret, production, mfaEncryptionKey = "", mfaIssuer = "SCOLARIS PAY", passwordResetWebhookUrl = "", passwordResetWebhookSecret = "" }) {
+export function createAuthService({ pool, secret, production, mfaEncryptionKey = "", mfaIssuer = "SCOLARIS PAY", passwordResetWebhookUrl = "", passwordResetWebhookSecret = "", resendApiKey = "", resendFromEmail = "SCOLARIS PAY <noreply@mail.scolarispay.online>", passwordResetBaseUrl = "https://www.scolarispay.online" }) {
   const deviceHashes = (req) => ({
     ipHash: opaqueDigest(clientAddress(req), secret),
     userAgentHash: opaqueDigest(String(req.headers["user-agent"] || "").slice(0, 512), secret),
@@ -345,28 +345,53 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
       [ipHash, user?.id || null],
     )).rows[0].total);
     if (recentRequests >= 5) return;
-    if (!user || !passwordResetWebhookUrl) {
-      await securityEvent(req, { type: "password_reset.requested", outcome: "accepted", userId: user?.id || null, schoolId: user?.school_id || null, metadata: { deliveryConfigured: Boolean(passwordResetWebhookUrl) } });
+    const deliveryConfigured = Boolean(passwordResetWebhookUrl || resendApiKey);
+    if (!user || !deliveryConfigured) {
+      await securityEvent(req, { type: "password_reset.requested", outcome: "accepted", userId: user?.id || null, schoolId: user?.school_id || null, metadata: { deliveryConfigured } });
       return;
     }
-    const endpoint = new URL(passwordResetWebhookUrl);
-    if (endpoint.protocol !== "https:") throw new Error("password_reset_unavailable");
+    const endpoint = passwordResetWebhookUrl ? new URL(passwordResetWebhookUrl) : null;
+    if (endpoint && endpoint.protocol !== "https:") throw new Error("password_reset_unavailable");
     const token = newOpaqueToken();
     const result = await pool.query(
       "INSERT INTO password_reset_tokens(user_id,token_hash,expires_at,requested_ip_hash) VALUES($1,$2,now()+interval '30 minutes',$3) RETURNING id",
       [user.id, opaqueDigest(token, secret), deviceHashes(req).ipHash],
     );
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(5_000),
-        headers: {
-          "content-type": "application/json",
-          ...(passwordResetWebhookSecret ? { authorization: `Bearer ${passwordResetWebhookSecret}` } : {}),
-        },
-        body: JSON.stringify({ email: user.email, token, expiresInMinutes: 30 }),
-      });
+      let response;
+      if (endpoint) {
+        response = await fetch(endpoint, {
+          method: "POST",
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+          headers: {
+            "content-type": "application/json",
+            ...(passwordResetWebhookSecret ? { authorization: `Bearer ${passwordResetWebhookSecret}` } : {}),
+          },
+          body: JSON.stringify({ email: user.email, token, expiresInMinutes: 30 }),
+        });
+      } else {
+        const resetUrl = new URL("/reinitialiser-mot-de-passe", passwordResetBaseUrl);
+        resetUrl.hash = new URLSearchParams({ token }).toString();
+        const link = resetUrl.toString();
+        response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+          headers: {
+            authorization: `Bearer ${resendApiKey}`,
+            "content-type": "application/json",
+            "Idempotency-Key": `password-reset-${result.rows[0].id}`,
+          },
+          body: JSON.stringify({
+            from: resendFromEmail,
+            to: [user.email],
+            subject: "Réinitialisez votre mot de passe SCOLARIS PAY",
+            text: `Bonjour,\n\nUtilisez ce lien valable 30 minutes pour définir un nouveau mot de passe SCOLARIS PAY :\n${link}\n\nSi vous n’êtes pas à l’origine de cette demande, ignorez ce message.\n\nL’équipe SCOLARIS PAY`,
+            html: `<p>Bonjour,</p><p>Utilisez le bouton ci-dessous dans les 30 minutes pour définir un nouveau mot de passe SCOLARIS PAY.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#22a879;color:#fff;text-decoration:none;font-weight:700">Définir un nouveau mot de passe</a></p><p>Si vous n’êtes pas à l’origine de cette demande, ignorez ce message.</p><p>L’équipe SCOLARIS PAY</p>`,
+          }),
+        });
+      }
       if (!response.ok) throw new Error("delivery_failed");
       await securityEvent(req, { type: "password_reset.requested", outcome: "delivered", userId: user.id, schoolId: user.school_id });
     } catch {

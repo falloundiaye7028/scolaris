@@ -6,6 +6,8 @@ const server = await readFile(new URL("../src/server.js", import.meta.url), "utf
 const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
 const timetableService = await readFile(new URL("../src/timetable-service.js", import.meta.url), "utf8");
 const authService = await readFile(new URL("../src/auth-service.js", import.meta.url), "utf8");
+const resetPage = await readFile(new URL("../../web/reinitialiser-mot-de-passe.html", import.meta.url), "utf8");
+const resetScript = await readFile(new URL("../../web/password-reset.js", import.meta.url), "utf8");
 const vercel = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
 
 test("l'API n'accepte plus de Bearer frontend ni de CORS universel", () => {
@@ -124,4 +126,18 @@ test("les codes parent ne sont jamais placés dans une URL", () => {
 test("la connexion PostgreSQL conserve la vérification TLS stricte", () => {
   assert.match(server, /sslmode', 'verify-full'/);
   assert.doesNotMatch(server, /rejectUnauthorized\s*:\s*false/);
+});
+
+test("la récupération du mot de passe utilise Resend et garde le jeton hors des journaux HTTP", () => {
+  assert.match(server, /VERCEL_ENV==='preview'&&process\.env\.VERCEL_URL/);
+  assert.match(server, /previewAppUrl\|\|process\.env\.PUBLIC_APP_URL/);
+  assert.match(authService, /https:\/\/api\.resend\.com\/emails/);
+  assert.match(authService, /Idempotency-Key/);
+  assert.match(authService, /resetUrl\.hash/);
+  assert.match(authService, /expiresInMinutes: 30/);
+  assert.match(resetPage, /autocomplete="new-password"/);
+  assert.match(resetScript, /window\.location\.hash/);
+  assert.match(resetScript, /history\.replaceState/);
+  assert.match(JSON.stringify(vercel.rewrites), /reinitialiser-mot-de-passe/);
+  assert.match(JSON.stringify(vercel.headers), /Referrer-Policy/);
 });

@@ -46,6 +46,15 @@
       ]
     },
     {
+      "source": "/reinitialiser-mot-de-passe",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
+        { "key": "Cache-Control", "value": "no-store, max-age=0" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    },
+    {
       "source": "/app",
       "headers": [
         { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
@@ -61,6 +70,7 @@
     { "source": "/connexion", "destination": "/connexion.html" },
     { "source": "/inscription-ecole", "destination": "/inscription-ecole.html" },
     { "source": "/confirmer-inscription", "destination": "/confirmer-inscription.html" },
+    { "source": "/reinitialiser-mot-de-passe", "destination": "/reinitialiser-mot-de-passe.html" },
     { "source": "/connexion-parent", "destination": "/connexion-parent.html" },
     { "source": "/confidentialite", "destination": "/confidentialite.html" },
     { "source": "/mentions-legales", "destination": "/mentions-legales.html" },

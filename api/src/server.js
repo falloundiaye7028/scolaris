@@ -51,12 +51,15 @@ if (!['off','privileged','all'].includes(mfaEnforcement)) throw new Error('MFA_E
 if (production && mfaEnforcement !== 'off' && !process.env.MFA_ENCRYPTION_KEY) throw new Error('MFA_ENCRYPTION_KEY est obligatoire lorsque la MFA est appliquée');
 let schemaReady;
 const ensureSchema = () => schemaReady ||= Promise.all([readFile(new URL('./schema.sql', import.meta.url), 'utf8'),readFile(new URL('./academic-schema.sql', import.meta.url), 'utf8'),readFile(new URL('./timetable-schema.sql', import.meta.url), 'utf8'),readFile(new URL('./fee-schema.sql', import.meta.url), 'utf8')]).then(async ([schema,academics,timetable,fees])=>{await pool.query(schema);await pool.query(academics);await pool.query(timetable);await pool.query(fees)});
-const authService = createAuthService({pool,secret,production,mfaEncryptionKey:process.env.MFA_ENCRYPTION_KEY,mfaIssuer:process.env.MFA_ISSUER || 'SCOLARIS PAY',passwordResetWebhookUrl:process.env.PASSWORD_RESET_WEBHOOK_URL,passwordResetWebhookSecret:process.env.PASSWORD_RESET_WEBHOOK_SECRET});
 const registrationWebhookUrl=process.env.SCHOOL_REGISTRATION_WEBHOOK_URL||'';
 const registrationWebhookSecret=process.env.SCHOOL_REGISTRATION_WEBHOOK_SECRET||'';
 const resendApiKey=process.env.RESEND_API_KEY||'';
 const resendFromEmail=process.env.RESEND_FROM_EMAIL||'SCOLARIS PAY <noreply@mail.scolarispay.online>';
 if(resendApiKey&&!/^[^<>\r\n]+<[^\s@<>]+@[^\s@<>]+>$/.test(resendFromEmail))throw new Error('RESEND_FROM_EMAIL invalide');
+const previewAppUrl=process.env.VERCEL_ENV==='preview'&&process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:'';
+const publicAppUrl=new URL(previewAppUrl||process.env.PUBLIC_APP_URL||(process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:production?'https://www.scolarispay.online':`http://localhost:${port}`));
+if(production&&publicAppUrl.protocol!=='https:')throw new Error('PUBLIC_APP_URL doit utiliser HTTPS');
+const authService = createAuthService({pool,secret,production,mfaEncryptionKey:process.env.MFA_ENCRYPTION_KEY,mfaIssuer:process.env.MFA_ISSUER || 'SCOLARIS PAY',passwordResetWebhookUrl:process.env.PASSWORD_RESET_WEBHOOK_URL,passwordResetWebhookSecret:process.env.PASSWORD_RESET_WEBHOOK_SECRET,resendApiKey,resendFromEmail,passwordResetBaseUrl:publicAppUrl.origin});
 const registrationAvailable=!production||Boolean(registrationWebhookUrl||resendApiKey);
 const notificationWebhookUrl=process.env.SCHOOL_NOTIFICATION_WEBHOOK_URL||'';
 const notificationWebhookSecret=process.env.SCHOOL_NOTIFICATION_WEBHOOK_SECRET||'';

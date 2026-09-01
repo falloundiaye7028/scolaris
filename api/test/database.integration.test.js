@@ -29,6 +29,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   delete process.env.SCHOOL_REGISTRATION_WEBHOOK_URL;
   process.env.RESEND_API_KEY = "re_integration_test_only";
   process.env.RESEND_FROM_EMAIL = "SCOLARIS PAY <noreply@mail.scolarispay.online>";
+  process.env.PUBLIC_APP_URL = "https://preview.scolarispay.test";
   process.env.VERCEL = "1";
   process.env.VERCEL_ENV = "preview";
   const [{ default: handler, closeDatabase }, { default: pg }, { default: bcrypt }] = await Promise.all([
@@ -539,11 +540,29 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   await admin.query("UPDATE users SET is_active=false,disabled_at=now() WHERE email='teacher-a@example.test'");
   assert.equal((await request("/api/students", { headers: { cookie: teacherCookie } })).status, 401);
 
-  const resetKnown = await request("/api/auth/password-reset/request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "direction-a@example.test" }) });
+  const legacyResetLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "legacy@example.test", password: weakLegacyPassword }) });
+  const legacyResetCookie = legacyResetLogin.headers.get("set-cookie").split(";")[0];
+  const resetKnown = await request("/api/auth/password-reset/request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "legacy@example.test" }) });
   const resetUnknown = await request("/api/auth/password-reset/request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "unknown@example.test" }) });
   assert.equal(resetKnown.status, 202);
   assert.equal(resetUnknown.status, 202);
   assert.deepEqual(await resetKnown.json(), await resetUnknown.json());
+  const resetEmail = sentEmails.find((email) => email.subject === "Réinitialisez votre mot de passe SCOLARIS PAY" && email.to.includes("legacy@example.test"));
+  assert.ok(resetEmail);
+  const resetLink = resetEmail.text.match(/https:\/\/[^\s]+/)?.[0];
+  assert.ok(resetLink);
+  const resetUrl = new URL(resetLink);
+  assert.equal(resetUrl.origin, "https://preview.scolarispay.test");
+  assert.equal(resetUrl.pathname, "/reinitialiser-mot-de-passe");
+  assert.equal(resetUrl.search, "");
+  const resetToken = new URLSearchParams(resetUrl.hash.slice(1)).get("token");
+  assert.equal(resetToken?.length, 43);
+  const resetConfirmation = await request("/api/auth/password-reset/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: resetToken, password: "CompteRecupere2026!" }) });
+  assert.equal(resetConfirmation.status, 200);
+  assert.equal((await request("/api/me", { headers: { cookie: legacyResetCookie } })).status, 401);
+  assert.equal((await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "legacy@example.test", password: weakLegacyPassword }) })).status, 401);
+  assert.equal((await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "legacy@example.test", password: "CompteRecupere2026!" }) })).status, 200);
+  assert.equal((await request("/api/auth/password-reset/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: resetToken, password: "AutreMotDePasse2026!" }) })).status, 400);
 
   assert.equal((await request("/api/auth/logout", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" })).status, 200);
   assert.equal((await request("/api/me", { headers: { cookie } })).status, 401);
