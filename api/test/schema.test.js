@@ -6,6 +6,7 @@ const schema = await readFile(new URL("../src/schema.sql", import.meta.url), "ut
 const academicSchema = await readFile(new URL("../src/academic-schema.sql", import.meta.url), "utf8");
 const timetableSchema = await readFile(new URL("../src/timetable-schema.sql", import.meta.url), "utf8");
 const attendanceSchema = await readFile(new URL("../src/attendance-schema.sql", import.meta.url), "utf8");
+const gradesSchema = await readFile(new URL("../src/grades-schema.sql", import.meta.url), "utf8");
 const feeSchema = await readFile(new URL("../src/fee-schema.sql", import.meta.url), "utf8");
 
 test("la migration de sécurité est additive et révocable", () => {
@@ -120,4 +121,21 @@ test("M3 relie chaque présence à une séance et à une inscription du même é
   assert.match(attendanceSchema, /attendance forbidden for cancelled lesson session/);
   assert.match(attendanceSchema, /version integer NOT NULL DEFAULT 1/);
   assert.doesNotMatch(attendanceSchema, /DROP TABLE|DROP COLUMN/i);
+});
+
+test("M4 ajoute une fondation de notes additive, décimale et multi-établissements", () => {
+  for (const table of ["grading_settings", "assessment_types", "assessments", "grades", "grade_events"]) {
+    assert.match(gradesSchema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(gradesSchema, /subject_coefficient numeric\(8,4\)/);
+  assert.match(gradesSchema, /maximum_score numeric\(10,4\)/);
+  assert.match(gradesSchema, /normalized_score numeric\(12,6\)/);
+  assert.match(gradesSchema, /UNIQUE\(school_id,assessment_id,student_id\)/);
+  assert.match(gradesSchema, /assessments_school_period_year_fkey/);
+  assert.match(gradesSchema, /assessments_school_assignment_year_fkey/);
+  assert.match(gradesSchema, /grades_school_enrollment_fkey/);
+  assert.match(gradesSchema, /student not enrolled for assessment/);
+  assert.match(gradesSchema, /version integer NOT NULL DEFAULT 1/);
+  assert.doesNotMatch(gradesSchema, /DROP TABLE|DROP COLUMN/i);
+  assert.doesNotMatch(gradesSchema, /\b(?:real|double precision|float)\b/i);
 });

@@ -156,10 +156,10 @@ export function hasSpreadsheetFormula(value) {
 }
 
 const ROLE_PERMISSIONS = {
-  owner: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify", "attendance.reports"]),
-  director: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify", "attendance.reports"]),
+  owner: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify", "attendance.reports", "assessments.read", "assessments.create", "assessments.update", "assessments.publish", "assessments.publish_with_pending", "assessments.lock", "assessments.reopen", "grades.read", "grades.enter", "grades.correct", "grade_reports.read", "grade_reports.export", "grading_settings.manage"]),
+  director: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "students.write", "billing.write", "fee_definitions.write", "fee_adjustments.write", "uniform_delivery.write", "payments.write", "reminders.write", "exports.read", "timetable.read", "timetable.manage", "rooms.read", "rooms.manage", "lesson_sessions.read", "lesson_sessions.manage", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify", "attendance.reports", "assessments.read", "assessments.create", "assessments.update", "assessments.publish", "assessments.publish_with_pending", "assessments.lock", "assessments.reopen", "grades.read", "grades.enter", "grades.correct", "grade_reports.read", "grade_reports.export", "grading_settings.manage"]),
   accountant: new Set(["students.read", "guardians.read", "billing.read", "reminders.read", "billing.write", "payments.write", "reminders.write", "exports.read"]),
-  teacher: new Set(["students.read", "timetable.read", "lesson_sessions.read", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify"]),
+  teacher: new Set(["students.read", "timetable.read", "lesson_sessions.read", "attendance.read", "attendance.mark", "attendance.update", "attendance.justify", "assessments.read", "assessments.create", "assessments.update", "assessments.publish", "grades.read", "grades.enter", "grades.correct", "grade_reports.read"]),
 };
 
 export function hasPermission(role, permission) {
@@ -168,6 +168,10 @@ export function hasPermission(role, permission) {
 
 export function permissionFor(method, pathname) {
   if (method === "GET") {
+    if (pathname === "/api/grade-reports.csv") return "grade_reports.export";
+    if (pathname.startsWith("/api/grade-reports")) return "grade_reports.read";
+    if (pathname.startsWith("/api/grades") || /^\/api\/students\/[^/]+\/grades$/.test(pathname)) return "grades.read";
+    if (pathname.startsWith("/api/assessments") || pathname.startsWith("/api/assessment-types") || pathname.startsWith("/api/grading-settings")) return "assessments.read";
     if (pathname.startsWith("/api/attendance/reports")) return "attendance.reports";
     if (pathname.startsWith("/api/attendance") || pathname.startsWith("/api/academic-periods")) return "attendance.read";
     if (pathname.startsWith("/api/exports/")) return "exports.read";
@@ -180,6 +184,16 @@ export function permissionFor(method, pathname) {
     if (pathname.startsWith("/api/invoices") || pathname.startsWith("/api/fee-") || pathname.startsWith("/api/uniform-assignments") || pathname.startsWith("/api/reports/fees") || pathname.startsWith("/api/payments") || pathname.startsWith("/api/student-payments") || pathname.startsWith("/api/student-fee-payments") || pathname.startsWith("/api/receipts") || pathname.startsWith("/api/collections") || pathname.startsWith("/api/dashboard")) return "billing.read";
     return "students.read";
   }
+  if (pathname === "/api/grading-settings") return "grading_settings.manage";
+  if (/^\/api\/teaching-assignments\/[^/]+\/coefficient$/.test(pathname)) return "grading_settings.manage";
+  if (pathname === "/api/assessment-types") return "assessments.create";
+  if (/^\/api\/assessments\/[^/]+\/publish$/.test(pathname)) return "assessments.publish";
+  if (/^\/api\/assessments\/[^/]+\/lock$/.test(pathname)) return "assessments.lock";
+  if (/^\/api\/assessments\/[^/]+\/reopen$/.test(pathname)) return "assessments.reopen";
+  if (/^\/api\/assessments\/[^/]+\/grades$/.test(pathname)) return "grades.enter";
+  if (/^\/api\/grades\/[^/]+$/.test(pathname)) return "grades.correct";
+  if (pathname === "/api/assessments") return "assessments.create";
+  if (pathname.startsWith("/api/assessments/")) return "assessments.update";
   if (pathname.startsWith("/api/attendance/justifications")) return "attendance.justify";
   if (/^\/api\/attendance\/sessions\/[^/]+\/records$/.test(pathname)) return "attendance.mark";
   if (pathname.startsWith("/api/academic-periods")) return "attendance.update";

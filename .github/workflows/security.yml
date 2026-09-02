@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825 # PostgreSQL 16.15 (bookworm)
         env:
           POSTGRES_USER: scolaris
           POSTGRES_PASSWORD: scolaris_test_only
@@ -26,23 +26,75 @@ jobs:
           --health-retries 5
     env:
       TEST_DATABASE_URL: postgresql://scolaris:scolaris_test_only@127.0.0.1:5432/scolaris_test
+      SCOLARIS_TOOLCHAIN_MODE: strict
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.20.0
           cache: npm
           cache-dependency-path: api/package-lock.json
-      - run: npm ci --prefix api
-      - run: npm run security:secrets
-      - run: npm run security:history
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: npm audit --prefix api --audit-level=high
+      - name: Install exact npm
+        run: npm install --global npm@11.19.1
+      - name: Verify exact CI toolchain
+        run: |
+          node --version
+          npm --version
+          npm run verify:toolchain
+      - name: Install frozen dependencies
+        run: npm ci --prefix api
+      - name: Verify lifecycle policy
+        run: npm run verify:lifecycle
+      - name: Prepare security artifacts
+        run: mkdir -p artifacts
+      - name: Scan working tree secrets
+        run: npm run security:secrets
+      - name: Scan repository history secrets
+        run: npm run security:history
+      - name: Gitleaks working tree
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+          dir --no-banner --redact=100 --exit-code 1 --report-format json
+          --report-path artifacts/gitleaks-working.json .
+      - name: Gitleaks history
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+          git --no-banner --redact=100 --exit-code 1 --report-format json
+          --report-path artifacts/gitleaks-history.json
+      - name: OSV dependency scan
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" -v "$GITHUB_WORKSPACE/artifacts:/reports"
+          ghcr.io/google/osv-scanner:v2.5.0@sha256:5b8b38e45bb2c5c4976f0f1f07860551ea6e1f235f642cf215f74d266fec2c1b
+          scan source --recursive --format json --output /reports/osv.json /src
+      - name: Generate CycloneDX SBOM
+        run: npm sbom --prefix api --sbom-format cyclonedx > artifacts/sbom.cdx.json
+      - name: Inventory and enforce licenses
+        run: node scripts/check-licenses.mjs artifacts/licenses.json
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee artifacts/tests.tap
+      - name: Build
+        run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --prefix api --audit-level=high
+      - name: Upload security and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: m4-security-and-test-evidence
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
 
   codeql:
     runs-on: ubuntu-latest
@@ -50,8 +102,8 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
