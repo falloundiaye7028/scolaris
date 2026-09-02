@@ -21,4 +21,3 @@ test("M4 exclut les résultats sans valeur du dénominateur", () => {
   assert.equal(roundFraction(average, 2), "12.00");
   assert.equal(weightedAverageFraction([{ value: null, weight: "1" }]), null);
 });
-

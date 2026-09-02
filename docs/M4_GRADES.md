@@ -25,4 +25,3 @@
 ## Argon2
 
 `argon2@0.45.1` est épinglé dans le lockfile et ses tests Argon2id sont verts. Les versions récentes de npm demandent une politique de scripts d'installation explicite. M4 autorise uniquement `argon2` dans le champ `allowScripts` du `package.json` de l'API; aucune autorisation globale n'est activée.
-

@@ -35,4 +35,3 @@ export function roundFraction(value, precision = 2) {
   const text = quotient.toString().padStart(precision + 1, "0");
   return precision ? `${text.slice(0, -precision)}.${text.slice(-precision)}` : text;
 }
-
