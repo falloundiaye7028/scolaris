@@ -2,9 +2,9 @@
 
 ## Status
 
-`M4_PRE_AUDIT_BLOCKERS_REMEDIATED_PENDING_REMOTE_EVIDENCE`
+`M4_REMEDIATION_IN_PROGRESS_PENDING_INDEPENDENT_REAUDIT`
 
-The product scope remains unchanged. M4.0 closes the identified local toolchain, lifecycle, authentication denial-of-service, supply-chain and historical-integrity blockers without adding new M4 business functionality. Remote CI, Preview benchmark/visual evidence and final human approvals remain mandatory gates.
+The product scope remains unchanged. The original remote gates and Preview evidence were accepted, then an independent code review requested targeted remediation. M4 is not approved, merged or deployed; fresh CI, Preview evidence and an independent re-audit remain mandatory.
 
 ## Business objective
 
@@ -60,9 +60,10 @@ Rollback strategy is roll-forward or application-only rollback while retaining a
 
 ## Formulas and invariants
 
-- `normalized = score / maximum_score × scale_max`.
-- `subject_average = Σ(normalized × assessment_coefficient) / Σ(included assessment coefficients)`.
-- `general_average = Σ(subject_average × effective subject_coefficient) / Σ(included subject coefficients)`.
+- `canonical_ratio = score / maximum_score`.
+- `subject_ratio = Σ(canonical_ratio × assessment_coefficient) / Σ(included assessment coefficients)`.
+- `general_ratio = Σ(subject_ratio × effective subject_coefficient) / Σ(included subject coefficients)`.
+- `displayed_average = ratio × latest published report scale`; round only this displayed value. Class averages use one `general_ratio` per student.
 - Use PostgreSQL `NUMERIC` or decimal-string/integer-rational logic; never binary `FLOAT/REAL` for authoritative calculations.
 - Preserve extra precision internally and round only at the configured display/output boundary.
 - Default absence/missing policy is exclusion; zero must be explicit.

@@ -124,6 +124,9 @@ test("M3 relie chaque présence à une séance et à une inscription du même é
 });
 
 test("M4 ajoute une fondation de notes additive, décimale et multi-établissements", () => {
+  assert.match(gradesSchema, /CREATE TABLE IF NOT EXISTS deployment_environment_identity/);
+  assert.match(gradesSchema, /environment IN \('development','preview','production'\)/);
+  assert.match(gradesSchema, /resource_fingerprint~'\^\[A-Fa-f0-9\]\{32,128\}\$'/);
   for (const table of ["grading_settings", "assessment_types", "assessments", "grades", "grade_events"]) {
     assert.match(gradesSchema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   }

@@ -1,6 +1,6 @@
 import pg from "pg";
 import { hashPassword } from "../src/auth-security.js";
-import { assertPreviewSeedAllowed } from "./preview-seed-guard.mjs";
+import { assertPreviewDatabaseIdentity, assertPreviewSeedAllowed } from "./preview-seed-guard.mjs";
 
 assertPreviewSeedAllowed();
 
@@ -16,6 +16,7 @@ if (["prefer", "require", "verify-ca"].includes(parsedDatabaseUrl.searchParams.g
 
 const pool = new pg.Pool({ connectionString: parsedDatabaseUrl.toString(), max: 2, connectionTimeoutMillis: 5_000 });
 const client = await pool.connect();
+await assertPreviewDatabaseIdentity(client);
 
 async function upsertSchool({ name, slug, email }) {
   return (await client.query(

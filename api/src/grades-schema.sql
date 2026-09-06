@@ -1,6 +1,14 @@
 -- M4 — Notes, évaluations, coefficients et moyennes.
 -- Migration additive, idempotente et compatible avec M1, M2 et M3.
 
+CREATE TABLE IF NOT EXISTS deployment_environment_identity (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  environment text NOT NULL CHECK(environment IN ('development','preview','production')),
+  resource_fingerprint text NOT NULL CHECK(resource_fingerprint~'^[A-Fa-f0-9]{32,128}$'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 ALTER TABLE teaching_assignments
   ADD COLUMN IF NOT EXISTS subject_coefficient numeric(8,4) NOT NULL DEFAULT 1;
 

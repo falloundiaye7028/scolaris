@@ -16,11 +16,18 @@
 - Le coefficient de matière est contextuel à la classe et à l'année : il est ajouté à `teaching_assignments` en `NUMERIC(8,4)`, avec valeur initiale `1`.
 - Les statuts de résultat sont `scored`, `absent`, `excused`, `exempt` et `pending`. Seul `scored` porte une note.
 - Une absence est exclue par défaut. La politique explicite `zero` l'intègre comme zéro. Les statuts `excused`, `exempt` et `pending` restent exclus.
-- Les calculs principaux sont effectués en PostgreSQL `NUMERIC`. La note normalisée est conservée avec six décimales; aucun `FLOAT` ou `REAL` n'est utilisé.
-- L'arrondi final utilise `round(value, rounding_precision)` selon le réglage de l'école. Les moyennes intermédiaires non arrondies alimentent la moyenne générale.
+- Les calculs principaux sont effectués en PostgreSQL `NUMERIC`; aucun `FLOAT` ou `REAL` n'est utilisé. Chaque résultat est d'abord converti en ratio canonique `score / maximum_score`, ou en zéro si le snapshot publié applique cette politique à une absence.
+- La moyenne matière est `Σ(ratio × coefficient d'évaluation) / Σ(coefficients inclus)`. La moyenne générale est `Σ(ratio matière × coefficient de matière) / Σ(coefficients de matière inclus)`. La moyenne de classe agrège ensuite une seule moyenne générale par élève.
+- L'affichage multiplie le ratio final par le barème du snapshot publié le plus récent dans le périmètre du rapport, puis applique uniquement à cette frontière son `rounding_precision`. Des publications `/20` et `/100` ne sont donc jamais additionnées directement.
 - Une évaluation `draft` est modifiable par son enseignant affecté. Une évaluation `published` exige une permission de correction et un motif. Une évaluation `locked` exige une réouverture privilégiée auditée.
 - Les modifications utilisent une version optimiste. Une version obsolète retourne HTTP 409 sans écrasement.
 - Les évaluations annulées et les matières sans résultat pris en compte sont exclues des moyennes.
+- `assessment_types.manage` est réservé à `owner` et `director`. Un enseignant conserve la création d'évaluations pour ses propres affectations, mais ne peut pas modifier le catalogue global des types.
+- Une réponse enseignant ne contient pas de `general_average`; elle expose seulement `authorized_average`, clairement présentée comme la moyenne des matières autorisées, sans révéler les matières d'un autre enseignant.
+
+## Seed Preview
+
+Le seed exige simultanément le contexte Vercel Preview explicite et une identité lue depuis `deployment_environment_identity` sur la connexion PostgreSQL réellement utilisée. Cette ligne unique doit porter `environment='preview'` et une empreinte stable correspondant à `SCOLARIS_PREVIEW_DATABASE_FINGERPRINT`. Une identité absente, inconnue, Production ou différente échoue avant `BEGIN` et avant toute écriture. Le hostname n'est pas une preuve d'identité; le provisionnement de cette ligne est une opération distante séparée nécessitant une autorisation humaine.
 
 ## Argon2
 

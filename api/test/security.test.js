@@ -106,6 +106,11 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(hasPermission("teacher", "attendance.reports"), false);
   assert.equal(hasPermission("accountant", "attendance.read"), false);
   assert.equal(hasPermission("owner", "assessments.lock"), true);
+  assert.equal(hasPermission("owner", "assessment_types.manage"), true);
+  assert.equal(hasPermission("director", "assessment_types.manage"), true);
+  assert.equal(hasPermission("teacher", "assessment_types.manage"), false);
+  assert.equal(hasPermission("student", "assessment_types.manage"), false);
+  assert.equal(hasPermission("parent", "assessment_types.manage"), false);
   assert.equal(hasPermission("director", "grading_settings.manage"), true);
   assert.equal(hasPermission("teacher", "grades.enter"), true);
   assert.equal(hasPermission("teacher", "assessments.lock"), false);
@@ -125,6 +130,7 @@ test("les rôles scolaires sont appliqués côté serveur", () => {
   assert.equal(permissionFor("PUT", "/api/lesson-sessions/123"), "lesson_sessions.manage");
   assert.equal(permissionFor("GET", "/api/assessments"), "assessments.read");
   assert.equal(permissionFor("POST", "/api/assessments"), "assessments.create");
+  assert.equal(permissionFor("POST", "/api/assessment-types"), "assessment_types.manage");
   assert.equal(permissionFor("POST", "/api/assessments/123/grades"), "grades.enter");
   assert.equal(permissionFor("POST", "/api/assessments/123/lock"), "assessments.lock");
   assert.equal(permissionFor("GET", "/api/grade-reports.csv"), "grade_reports.export");
@@ -273,9 +279,42 @@ test("toutes les ouvertures directes et le nettoyage MFA utilisent le gestionnai
   assert.match(privateHtml, /function modalFocusFallback\(\)[\s\S]*?setAttribute\('tabindex','-1'\)/);
   assert.match(privateHtml, /function openModal[\s\S]*?modalFocus\.open\(document\.activeElement\)/);
   assert.match(privateHtml, /function showRecoveryCodes[\s\S]*?modalFocus\.open\(document\.activeElement\)/);
+  assert.match(privateHtml, /async function studentGrades[\s\S]*?modalFocus\.open\(document\.activeElement\)/);
   assert.match(privateHtml, /function closeModal\(\)\{if\(\$\('#modalTitle'\)\.textContent\.includes\('récupération'\)\)pendingRecoveryCodes=\[\];if\(\$\('#modalTitle'\)\.textContent\.includes\('vérification en deux étapes'\)\)pendingMfaSecret='';modalFocus\.close\(\)\}/);
   const closeModal = privateHtml.match(/function closeModal\(\)\{[^}]+\}/)?.[0] || "";
   assert.doesNotMatch(closeModal, /classList\.add\('hidden'\)/);
+});
+
+test("le dialogue reçoit le focus et confine la navigation Tab avant de le restituer", async () => {
+  const source = await readFile(new URL("../../web/security.js", import.meta.url), "utf8");
+  const context = { window: {} };
+  vm.runInNewContext(source, context);
+  let active, keydown;
+  const node = () => ({
+    disabled: false, hidden: false, isConnected: true,
+    classList: { contains: () => false }, closest: () => null, getAttribute: () => null, getClientRects: () => [{}],
+    focus() { active = this; },
+  });
+  const trigger = node(), first = node(), last = node();
+  const modal = node();
+  let hidden = true;
+  modal.classList = { add() { hidden = true; }, remove() { hidden = false; }, contains() { return hidden; } };
+  modal.querySelectorAll = () => [first, last];
+  modal.addEventListener = (type, listener) => { if (type === "keydown") keydown = listener; };
+  active = trigger;
+  const controller = context.window.ScolarisSecurity.createModalFocusController({ modal, getActiveElement: () => active });
+  controller.open(trigger);
+  assert.equal(active, first, "le premier contrôle du dialogue reçoit le focus");
+  active = last;
+  let prevented = false;
+  keydown({ key: "Tab", shiftKey: false, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(active, first, "Tab reboucle sur le premier contrôle");
+  active = first;
+  keydown({ key: "Tab", shiftKey: true, preventDefault() {} });
+  assert.equal(active, last, "Maj+Tab reboucle sur le dernier contrôle");
+  controller.close();
+  assert.equal(active, trigger, "le déclencheur retrouve le focus");
 });
 
 test("le contraste renforcé protège la date et les en-têtes de tableau", async () => {

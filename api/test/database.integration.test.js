@@ -36,6 +36,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
     import("pg"),
     import("bcryptjs"),
   ]);
+  const { assertPreviewDatabaseIdentity } = await import("../scripts/preview-seed-guard.mjs");
   const admin = new pg.Client({ connectionString: databaseUrl });
   await admin.connect();
   context.after(async () => admin.end());
@@ -60,6 +61,14 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const request = async (path, options = {}) => originalFetch(`${baseUrl}${path}`, { ...options, headers: { origin: baseUrl, "x-forwarded-proto": "http", ...(options.headers || {}) } });
 
   await request("/api/health");
+  const previewSeedEnvironment = { VERCEL: "1", VERCEL_ENV: "preview", SCOLARIS_ALLOW_PREVIEW_SEED: "1", SCOLARIS_PREVIEW_DATABASE_FINGERPRINT: "a".repeat(64) };
+  await admin.query("INSERT INTO deployment_environment_identity(singleton,environment,resource_fingerprint) VALUES(true,'production',$1)", ["a".repeat(64)]);
+  await assert.rejects(assertPreviewDatabaseIdentity(admin, previewSeedEnvironment), /IDENTIFIED_AS_PRODUCTION/);
+  await admin.query("UPDATE deployment_environment_identity SET environment='preview',resource_fingerprint=$1", ["b".repeat(64)]);
+  await assert.rejects(assertPreviewDatabaseIdentity(admin, previewSeedEnvironment), /RESOURCE_MISMATCH/);
+  await admin.query("UPDATE deployment_environment_identity SET resource_fingerprint=$1", ["a".repeat(64)]);
+  await assert.doesNotReject(assertPreviewDatabaseIdentity(admin, previewSeedEnvironment));
+  await admin.query("DELETE FROM deployment_environment_identity");
   assert.equal((await request("/app")).status, 401);
   const passwordHash = await bcrypt.hash("MotDePasse#2026", 12);
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
@@ -362,10 +371,27 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const devoirType = assessmentTypes.find((type) => type.code === "assignment");
   const compositionType = assessmentTypes.find((type) => type.code === "composition");
   assert.ok(devoirType && compositionType);
+  assert.equal((await request("/api/assessment-types", { method: "POST", headers: { cookie: m2TeacherCookie, "content-type": "application/json" }, body: JSON.stringify({ code: "teacher_global", name: "Type global enseignant" }) })).status, 403);
+  const schoolBTypeResponse = await request("/api/assessment-types", { method: "POST", headers: { cookie: m3SchoolBCookie, "content-type": "application/json", "user-agent": "M3 School B" }, body: JSON.stringify({ code: "school_b_only", name: "Type établissement B" }) });
+  assert.equal(schoolBTypeResponse.status, 201);
+  assert.equal((await (await request("/api/assessment-types", { headers: { cookie } })).json()).some((type) => type.code === "school_b_only"), false);
   const createAssessment = async (teachingAssignmentId, assessmentTypeId, title, assessmentDate, maximumScore, coefficient, sessionCookie = cookie, userAgent) => {
     const response = await request("/api/assessments", { method: "POST", headers: { cookie: sessionCookie, "content-type": "application/json", ...(userAgent ? { "user-agent": userAgent } : {}) }, body: JSON.stringify({ academicYearId: currentYear.id, academicPeriodId: academicPeriodData.id, teachingAssignmentId, assessmentTypeId, title, assessmentDate, maximumScore, coefficient }) });
     return { response, data: await response.json() };
   };
+  await admin.query(`CREATE OR REPLACE FUNCTION reject_m4_creation_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.action IN ('assessment_type.created','assessment.created') THEN RAISE EXCEPTION USING ERRCODE='XX000', MESSAGE='forced audit failure'; END IF; RETURN NEW; END $$`);
+  await admin.query("CREATE TRIGGER reject_m4_creation_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_m4_creation_audit()");
+  assert.equal((await request("/api/assessment-types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ code: "audit_atomic", name: "Audit atomique" }) })).status, 500);
+  assert.equal(Number((await admin.query("SELECT count(*) total FROM assessment_types WHERE school_id=$1 AND code='audit_atomic'", [schoolA])).rows[0].total), 0);
+  const failedAtomicAssessment = await createAssessment(assignment.id, devoirType.id, "Évaluation audit atomique", "2026-10-12", 20, 1);
+  assert.equal(failedAtomicAssessment.response.status, 500);
+  assert.equal(Number((await admin.query("SELECT count(*) total FROM assessments WHERE school_id=$1 AND title='Évaluation audit atomique'", [schoolA])).rows[0].total), 0);
+  await admin.query("DROP TRIGGER reject_m4_creation_audit ON audit_logs");
+  await admin.query("DROP FUNCTION reject_m4_creation_audit()");
+  assert.equal((await request("/api/assessment-types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ code: "audit_atomic", name: "Audit atomique" }) })).status, 201);
+  assert.equal((await createAssessment(assignment.id, devoirType.id, "Évaluation audit atomique", "2026-10-12", 20, 1)).response.status, 201);
+  assert.equal(Number((await admin.query("SELECT count(*) total FROM assessments WHERE school_id=$1 AND title='Évaluation audit atomique'", [schoolA])).rows[0].total), 1);
   const mathEvaluationOne = await createAssessment(assignment.id, devoirType.id, "Devoir 1 de mathématiques", "2026-10-05", 20, 1, m2TeacherCookie);
   const mathEvaluationTwo = await createAssessment(assignment.id, compositionType.id, "Composition de mathématiques", "2026-10-10", 10, 2, m2TeacherCookie);
   const frenchEvaluation = await createAssessment(classConflictAssignment.id, devoirType.id, "Devoir de français", "2026-10-15", 20, 1, m3OtherTeacherCookie, "M3 Other Teacher");
@@ -442,6 +468,11 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await unconfirmedPendingPublish.json()).publicationSummary.pending, 1);
   const confirmedPendingPublish = await request(`/api/assessments/${draftUnderNewPolicy.data.id}/publish`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: draftUnderNewPolicy.data.version, confirmPending: true, reason: "Publication exceptionnelle validée par la direction" }) });
   assert.equal(confirmedPendingPublish.status, 200);
+  const mixedScaleReport = await (await request(`/api/grade-reports?scope=student&academicPeriodId=${academicPeriodData.id}&studentId=${schoolAStudent}`, { headers: { cookie } })).json();
+  assert.equal(mixedScaleReport.rows.find((row) => row.subject_name === "Mathématiques").subject_average, "70");
+  assert.equal(mixedScaleReport.rows.find((row) => row.subject_name === "Français").subject_average, "65");
+  assert.equal(mixedScaleReport.rows[0].general_average, "68");
+  assert.ok(mixedScaleReport.rows.every((row) => row.scale_max === "100.00"));
   assert.equal((await request(`/api/assessments/${draftUnderNewPolicy.data.id}/cancel`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: 2, reason: "Fixture pending retirée des moyennes" }) })).status, 200);
   assert.equal((await request(`/api/teaching-assignments/${assignment.id}/coefficient`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ subjectCoefficient: 9 }) })).status, 200);
   const coefficientUnchanged = await (await request(`/api/grade-reports?scope=student&academicPeriodId=${academicPeriodData.id}&studentId=${schoolAStudent}`, { headers: { cookie } })).json();
@@ -450,7 +481,13 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await request("/api/grading-settings", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, scaleMax: 20, roundingPrecision: 2, absencePolicy: "exclude", missingGradePolicy: "exclude" }) })).status, 200);
   const teacherGradeReport = await request(`/api/grade-reports?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie: m2TeacherCookie } });
   assert.equal(teacherGradeReport.status, 200);
-  assert.deepEqual(new Set((await teacherGradeReport.json()).rows.map((row) => row.subject_name)), new Set(["Mathématiques"]));
+  const teacherGradeData = await teacherGradeReport.json();
+  assert.deepEqual(new Set(teacherGradeData.rows.map((row) => row.subject_name)), new Set(["Mathématiques"]));
+  assert.ok(teacherGradeData.rows.every((row) => row.general_average === undefined && row.authorized_average !== undefined && row.average_scope === "authorized_subjects"));
+  assert.equal(teacherGradeData.summary.classAverage, undefined);
+  const teacherStudentGrades = await (await request(`/api/students/${schoolAStudent}/grades?academicPeriodId=${academicPeriodData.id}`, { headers: { cookie: m2TeacherCookie } })).json();
+  assert.ok(teacherStudentGrades.rows.every((row) => row.general_average === undefined && row.authorized_average !== undefined));
+  assert.deepEqual(new Set(teacherStudentGrades.assessments.map((assessment) => assessment.subject_name)), new Set(["Mathématiques"]));
   assert.equal((await request(`/api/grade-reports?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
   assert.equal((await request(`/api/assessments/${mathEvaluationOne.data.id}/roster`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
   assert.equal((await request(`/api/grade-reports?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie: m3AccountantCookie, "user-agent": "M3 Accountant" } })).status, 403);
@@ -459,6 +496,27 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const cancelledReport = await (await request(`/api/grade-reports?scope=student&academicPeriodId=${academicPeriodData.id}&studentId=${schoolAStudent}`, { headers: { cookie } })).json();
   assert.deepEqual(new Set(cancelledReport.rows.map((row) => row.subject_name)), new Set(["Mathématiques"]));
   assert.equal(cancelledReport.rows[0].general_average, "14.67");
+  const classAverageClass = (await admin.query("INSERT INTO classes(school_id,academic_year_id,name,level,capacity) VALUES($1,$2,'Classe moyenne exacte','Test',10) RETURNING id", [schoolA, currentYear.id])).rows[0];
+  const classAverageStudents = (await admin.query("WITH inserted AS (INSERT INTO students(school_id,matricule,first_name,last_name) VALUES($1,'AVG-A','Élève','Moyenne A'),($1,'AVG-B','Élève','Moyenne B') RETURNING id,matricule) SELECT id FROM inserted ORDER BY matricule", [schoolA])).rows;
+  await admin.query("INSERT INTO enrollments(school_id,student_id,class_id,academic_year_id,status,enrolled_at) VALUES($1,$2,$4,$5,'active','2026-09-01'),($1,$3,$4,$5,'active','2026-09-01')", [schoolA, classAverageStudents[0].id, classAverageStudents[1].id, classAverageClass.id, currentYear.id]);
+  const classAverageSubjects = (await admin.query("WITH inserted AS (INSERT INTO subjects(school_id,name,code) VALUES($1,'Matière moyenne 1','AVG-1'),($1,'Matière moyenne 2','AVG-2') RETURNING id,code) SELECT id FROM inserted ORDER BY code", [schoolA])).rows;
+  const classAverageAssignments = [];
+  for (const subject of classAverageSubjects) {
+    const classAverageAssignment = (await admin.query("INSERT INTO teaching_assignments(school_id,academic_year_id,teacher_id,class_id,subject_id,status,subject_coefficient) VALUES($1,$2,$3,$4,$5,'active',1) RETURNING id", [schoolA, currentYear.id, teacherA.id, classAverageClass.id, subject.id])).rows[0];
+    assert.equal((await request(`/api/teaching-assignments/${classAverageAssignment.id}/coefficient`, { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ subjectCoefficient: 1 }) })).status, 200);
+    classAverageAssignments.push(classAverageAssignment);
+  }
+  const averageAssessmentOne = await createAssessment(classAverageAssignments[0].id, devoirType.id, "Moyenne exacte matière 1", "2026-10-18", 20, 1);
+  const averageAssessmentTwo = await createAssessment(classAverageAssignments[1].id, devoirType.id, "Moyenne exacte matière 2", "2026-10-19", 20, 1);
+  assert.equal((await saveGrades(averageAssessmentOne.data, [{ studentId: classAverageStudents[0].id, status: "scored", score: 20 }, { studentId: classAverageStudents[1].id, status: "scored", score: 10 }], cookie)).status, 200);
+  assert.equal((await saveGrades(averageAssessmentTwo.data, [{ studentId: classAverageStudents[0].id, status: "scored", score: 20 }], cookie)).status, 200);
+  const averagePublishOne = await publish(averageAssessmentOne.data, cookie);
+  assert.equal(averagePublishOne.status, 200, await averagePublishOne.text());
+  const averagePublishTwo = await request(`/api/assessments/${averageAssessmentTwo.data.id}/publish`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: averageAssessmentTwo.data.version, confirmPending: true, reason: "Publication pour moyenne de classe exacte" }) });
+  assert.equal(averagePublishTwo.status, 200, await averagePublishTwo.text());
+  const exactClassAverage = await (await request(`/api/grade-reports?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${classAverageClass.id}`, { headers: { cookie } })).json();
+  assert.deepEqual(exactClassAverage.rows.map((row) => row.general_average).sort(), ["10.00", "20.00", "20.00"]);
+  assert.ok(exactClassAverage.rows.every((row) => row.class_average === "15.00"));
   assert.equal((await request(`/api/grade-reports.csv?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie } })).status, 200);
   assert.match(await (await request(`/api/grade-reports.csv?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie } })).text(), /'=Alerte/);
   await assert.rejects(admin.query("INSERT INTO grades(school_id,assessment_id,student_id,enrollment_id,status,score,entered_by) VALUES($1,$2,$3,$4,'scored',10,$5)", [schoolA, mathEvaluationOne.data.id, m3SchoolBStudent, schoolBEnrollment.id, teacherA.id]), (error) => ["23503", "P0001"].includes(error.code));
@@ -611,7 +669,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const ownStudents = await request("/api/students", { headers: { cookie } });
   assert.equal(ownStudents.status, 200);
   const ownStudentRows = await ownStudents.json();
-  assert.deepEqual(ownStudentRows.map((student) => student.matricule).sort(), ["A-001", secondStudent.matricule].sort());
+  assert.deepEqual(ownStudentRows.map((student) => student.matricule).sort(), ["A-001", "AVG-A", "AVG-B", secondStudent.matricule].sort());
   assert.equal("school_id" in ownStudentRows[0], false);
   assert.equal("password_hash" in ownStudentRows[0], false);
   assert.equal((await request("/api/students?limit=201", { headers: { cookie } })).status, 400);

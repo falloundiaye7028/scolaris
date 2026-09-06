@@ -71,8 +71,8 @@ test("M4 sérialise les notes, contrôle l'affectation et calcule en NUMERIC", (
   assert.match(gradesService, /jsonb_to_recordset/);
   assert.match(gradesService, /expected_version !== current\.version/);
   assert.match(gradesService, /Ces notes ont été modifiées par un autre utilisateur/);
-  assert.match(gradesService, /sum\(effective_score\*coefficient\)/);
-  assert.match(gradesService, /sum\(subject_average_raw\*subject_coefficient\)/);
+  assert.match(gradesService, /sum\(effective_ratio\*coefficient\)/);
+  assert.match(gradesService, /sum\(subject_average_ratio\*subject_coefficient\)/);
   assert.match(gradesService, /grade_reports\.exported/);
 });
 

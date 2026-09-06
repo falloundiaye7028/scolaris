@@ -41,6 +41,7 @@ Security invariants:
 | Compromised dependency | Build/runtime compromise | frozen lock, exact runtime/tool pins, strict versioned lifecycle allowlist, npm audit, OSV, SBOM, provenance | CI supply-chain gate |
 | Floating CI action | Workflow takeover risk | pin actions and service images to immutable SHA/digest | workflow policy test |
 | Cache/public route leak | Unpublished grades exposed | private routes only; no-store/private; noindex; public HTML contains no grade state | header/public-bundle tests |
+| Preview seed targets Production | Destructive synthetic-data overwrite | PostgreSQL-persisted environment identity plus stable resource fingerprint checked on the connected database before `BEGIN` | missing/unknown/Production/mismatched identity tests |
 
 ## Privacy and logging
 
@@ -55,8 +56,8 @@ Grade/comment payloads are sensitive educational data. Logs may contain action, 
 - Gitleaks fixtures are limited by exact path/rule/fingerprint entries, and a non-versioned canary is detected.
 - Published grading policies, coefficients and calculations use versioned snapshots; correction and workflow histories are append-only for normal application roles.
 
-Human approval of the Argon2 allowlist remains distinct from this technical proposal. Remote CI/CodeQL and authenticated synthetic Preview evidence remain gate conditions.
+The exact Argon2 allowlist and the previous remote CI/CodeQL and Preview evidence were accepted by explicit human decisions. The independent M4 review subsequently requested targeted remediation of arithmetic, RBAC, seed identity, transactionality and accessibility findings.
 
 ## Security acceptance gate
 
-M4 security approval requires all critical tenant/RBAC/workflow tests, remediation and load proof for Argon2 abuse, human-approved exact install-script policy, immutable CI pins, clean/accepted secret scans, CodeQL green, isolated authenticated Preview testing, and no production modification. Local M4.0 controls pass; the private Preview gate and remote CI evidence remain pending. Until then: `M4_IMPLEMENTATION_NOT_AUTHORIZED`.
+M4 remains unapproved and unmerged while this remediation awaits fresh CI, Preview and independent re-audit. Production must remain on the accepted M3 deployment until a separate human authorization.
