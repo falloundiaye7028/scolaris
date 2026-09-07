@@ -688,6 +688,23 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const platformMfaConfirm = await request("/api/auth/mfa/confirm", { method: "POST", headers: { ...platformHeaders, cookie: platformCookie }, body: JSON.stringify({ code: totp(platformMfaSecret) }) });
   assert.equal(platformMfaConfirm.status, 200);
 
+  const schoolContextHeaders = { cookie: platformCookie, "user-agent": "Platform Integration Test", "x-scolaris-school-context": schoolA };
+  const contextualProfile = await request("/api/me", { headers: schoolContextHeaders });
+  assert.equal(contextualProfile.status, 200);
+  const contextualProfileData = await contextualProfile.json();
+  assert.equal(contextualProfileData.platformAdmin, true);
+  assert.equal(contextualProfileData.platformContext.id, schoolA);
+  assert.equal(contextualProfileData.school_name, "École A");
+  const contextualStudents = await request("/api/students", { headers: schoolContextHeaders });
+  assert.equal(contextualStudents.status, 200);
+  const contextualStudentRows = await contextualStudents.json();
+  assert.ok(contextualStudentRows.some((student) => student.matricule === "A-001"));
+  assert.ok(contextualStudentRows.every((student) => student.matricule !== "B-001"));
+  const forbiddenSchoolContext = await request("/api/students", { headers: { cookie, "user-agent": "Integration Test", "x-scolaris-school-context": schoolB } });
+  assert.equal(forbiddenSchoolContext.status, 403);
+  const missingSchoolContext = await request("/api/me", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test", "x-scolaris-school-context": "00000000-0000-4000-8000-000000000000" } });
+  assert.equal(missingSchoolContext.status, 404);
+
   const registrationChallengeResponse = await request("/api/public/registration-challenge");
   assert.equal(registrationChallengeResponse.status, 200);
   const registrationChallenge = (await registrationChallengeResponse.json()).challenge;
