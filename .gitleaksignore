@@ -1,0 +1,11 @@
+# Owner: SCOLARIS security maintainer; review: 2026-09-01.
+# Synthetic environment-template fixture; exact current and historical fingerprints only.
+.env.example:generic-api-key:2
+f0e08361d2e5f1005c6b4c8a5d388b9b3bcb9ca4:.env.example:generic-api-key:2
+6bb8a8c03bcb5f675c1dba6e24c86d9d65b7efad:.env.example:generic-api-key:2
+
+# Owner: SCOLARIS security maintainer; review: 2026-09-01.
+# Synthetic isolated-integration fixture; exact current and historical fingerprints only.
+api/test/database.integration.test.js:generic-api-key:25
+f0e08361d2e5f1005c6b4c8a5d388b9b3bcb9ca4:api/test/database.integration.test.js:generic-api-key:12
+6bb8a8c03bcb5f675c1dba6e24c86d9d65b7efad:api/test/database.integration.test.js:generic-api-key:12

@@ -127,7 +127,7 @@ export function createTimetableRouter({ pool, body, json, identifier, isoDate, p
     }
     if (route === "GET /api/teaching-assignments") {
       const teacherId = me.role === "teacher" ? me.sub : null;
-      const rows = (await pool.query(`SELECT assignment.id,assignment.academic_year_id,assignment.teacher_id,assignment.class_id,assignment.subject_id,assignment.status,
+      const rows = (await pool.query(`SELECT assignment.id,assignment.academic_year_id,assignment.teacher_id,assignment.class_id,assignment.subject_id,assignment.status,assignment.subject_coefficient,
         year.label academic_year,teacher.name teacher_name,class.name class_name,subject.name subject_name
         FROM teaching_assignments assignment JOIN academic_years year ON year.id=assignment.academic_year_id AND year.school_id=assignment.school_id
         JOIN users teacher ON teacher.id=assignment.teacher_id AND teacher.school_id=assignment.school_id JOIN classes class ON class.id=assignment.class_id AND class.school_id=assignment.school_id

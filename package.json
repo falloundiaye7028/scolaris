@@ -2,13 +2,21 @@
   "name": "scolaris-pay",
   "version": "0.2.0",
   "private": true,
+  "engines": {
+    "node": ">=24.19.0 <25",
+    "npm": ">=11.17.0 <12"
+  },
+  "packageManager": "npm@11.19.1",
   "scripts": {
+    "preinstall": "node scripts/verify-toolchain.mjs",
+    "verify:toolchain": "node scripts/verify-toolchain.mjs",
+    "verify:lifecycle": "node scripts/verify-lifecycle-policy.mjs",
     "test": "npm --prefix api test",
     "lint": "npm --prefix api run lint && npm --prefix web run lint",
     "typecheck": "npm --prefix api run typecheck && npm --prefix web run lint",
     "security:secrets": "node scripts/scan-secrets.mjs",
     "security:history": "node scripts/scan-history-secrets.mjs",
     "security:audit": "npm audit --prefix api --audit-level=high",
-    "build": "npm run lint && npm run typecheck && npm run test"
+    "build": "npm run verify:toolchain && npm run verify:lifecycle && npm run lint && npm run typecheck && npm run test"
   }
 }
