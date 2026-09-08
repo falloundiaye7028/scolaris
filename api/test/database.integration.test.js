@@ -701,7 +701,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const contextualStudentRows = await contextualStudents.json();
   assert.ok(contextualStudentRows.some((student) => student.matricule === "A-001"));
   assert.ok(contextualStudentRows.every((student) => student.matricule !== "B-001"));
-  const forbiddenSchoolContext = await request("/api/students", { headers: { cookie, "user-agent": "Integration Test", "x-scolaris-school-context": schoolB } });
+  const forbiddenSchoolContext = await request("/api/students", { headers: { cookie, "x-scolaris-school-context": schoolB } });
   assert.equal(forbiddenSchoolContext.status, 403);
   const missingSchoolContext = await request("/api/me", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test", "x-scolaris-school-context": "00000000-0000-4000-8000-000000000000" } });
   assert.equal(missingSchoolContext.status, 404);
