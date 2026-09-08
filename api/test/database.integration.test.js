@@ -154,6 +154,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   for (const studentId of [schoolAStudent, secondStudent.id]) {
     assert.equal((await request("/api/enrollments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId, classId: currentClass.id, academicYearId: currentYear.id }) })).status, 201);
   }
+  await admin.query("UPDATE enrollments SET enrolled_at='2026-09-01' WHERE school_id=$1 AND academic_year_id=$2 AND class_id=$3", [schoolA, currentYear.id, currentClass.id]);
   assert.equal((await request("/api/enrollments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, classId: nextClass.id, academicYearId: nextYear.id }) })).status, 201);
 
   const academicStudents = await (await request("/api/students", { headers: { cookie } })).json();
