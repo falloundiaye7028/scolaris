@@ -426,6 +426,14 @@ test("l'interface financière couvre les frais annuels, les versements et la rem
   assert.match(privateHtml, /enrollmentModal/);
 });
 
+test("le Super-administrateur dispose d'un sélecteur d'établissement isolé", async () => {
+  const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  assert.match(privateHtml, /id="schoolContextSelect"/);
+  assert.match(privateHtml, /x-scolaris-school-context/);
+  assert.match(privateHtml, /URLSearchParams\(location\.search\)/);
+  assert.match(privateHtml, /profile\.platformAdmin.*profile\.platformContext/s);
+});
+
 test("l'interface M2 propose les vues classe et enseignant avec un agenda mobile", async () => {
   const privateHtml = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
   assert.match(privateHtml, /data-view="timetable"/);
