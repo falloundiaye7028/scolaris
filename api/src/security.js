@@ -104,7 +104,7 @@ export function isAllowedBrowserOrigin(req, allowedOrigins = []) {
 
 export function safeCsvValue(value) {
   const text = String(value ?? "").replaceAll("\0", "");
-  return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /^[\s]*[=+\-@\t\r]/.test(text) ? `'${text}` : text;
 }
 
 export function quoteCsv(value) {
@@ -179,7 +179,7 @@ export function permissionFor(method, pathname) {
     if (pathname.startsWith("/api/lesson-sessions")) return "lesson_sessions.read";
     if (pathname.startsWith("/api/timetable-entries") || pathname.startsWith("/api/teaching-assignments") || pathname.startsWith("/api/subjects") || pathname.startsWith("/api/teachers")) return "timetable.read";
     if (/^\/api\/students\/[^/]+\/statement$/.test(pathname)) return "billing.read";
-    if (pathname.startsWith("/api/guardians")) return "guardians.read";
+    if (pathname.startsWith("/api/guardians") || pathname.startsWith("/api/student-guardians")) return "guardians.read";
     if (pathname.startsWith("/api/reminders")) return "reminders.read";
     if (pathname.startsWith("/api/invoices") || pathname.startsWith("/api/fee-") || pathname.startsWith("/api/uniform-assignments") || pathname.startsWith("/api/reports/fees") || pathname.startsWith("/api/payments") || pathname.startsWith("/api/student-payments") || pathname.startsWith("/api/student-fee-payments") || pathname.startsWith("/api/receipts") || pathname.startsWith("/api/collections") || pathname.startsWith("/api/dashboard")) return "billing.read";
     return "students.read";

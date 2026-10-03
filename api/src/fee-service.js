@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { pagination } from "./security.js";
 
 export const FEE_TYPES = Object.freeze(["tuition", "registration", "uniform", "transport", "other"]);
 export const FEE_TYPE_LABELS = Object.freeze({
@@ -15,6 +16,7 @@ export const UNIFORM_ITEM_TYPES = Object.freeze(["Uniforme complet", "Chemise", 
 export function financialStatus({ amountDueXof, amountPaidXof, cancelled = false, exempted = false }) {
   if (cancelled) return "cancelled";
   if (exempted) return "exempted";
+  if (amountDueXof <= 0) return "paid";
   if (amountPaidXof <= 0) return "unpaid";
   if (amountPaidXof < amountDueXof) return "partially_paid";
   return "paid";
@@ -122,6 +124,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
   const invoiceFilters = (url, schoolId) => {
     const values = [schoolId], clauses = ["i.school_id=$1"];
     const add = (sql, value) => { values.push(value); clauses.push(sql.replace("?", `$${values.length}`)); };
+    if (url.pathname === "/api/collections/overdue") clauses.push("i.financial_status NOT IN ('cancelled','exempted') AND i.due_date<CURRENT_DATE AND i.amount_due_xof>COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)");
     const feeType = url.searchParams.get("feeType");
     const financial = url.searchParams.get("status");
     if (feeType) add("i.fee_type=?", oneOf(feeType, FEE_TYPES));
@@ -135,17 +138,17 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
     return { values, where: clauses.join(" AND ") };
   };
 
-  const selectInvoices = async (url, schoolId, limit = 500) => {
+  const selectInvoices = async (url, schoolId, limit = 500, offset = 0) => {
     const filter = invoiceFilters(url, schoolId);
-    filter.values.push(limit);
+    filter.values.push(limit, offset);
     return (await pool.query(`SELECT i.id,i.student_id,i.fee_definition_id,i.academic_year_id,i.class_id,i.label,i.description,i.amount_minor,i.currency,i.due_date,i.status,i.fee_type,i.is_mandatory,i.amount_expected_xof,i.discount_xof,i.amount_due_xof,
       COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)::text amount_paid_xof,
       GREATEST(i.amount_due_xof-COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0),0)::text balance_xof,
-      CASE WHEN i.financial_status IN ('cancelled','exempted') THEN i.financial_status WHEN COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)=0 THEN 'unpaid' WHEN COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)<i.amount_due_xof THEN 'partially_paid' ELSE 'paid' END financial_status,
+      CASE WHEN i.financial_status IN ('cancelled','exempted') THEN i.financial_status WHEN i.amount_due_xof=0 THEN 'paid' WHEN COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)=0 THEN 'unpaid' WHEN COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)<i.amount_due_xof THEN 'partially_paid' ELSE 'paid' END financial_status,
       i.exemption_reason,i.cancelled_at,i.cancellation_reason,i.created_at,i.updated_at,s.first_name,s.last_name,s.matricule,COALESCE(c.name,s.class_name) class_name,a.label academic_year,
       u.item_type,u.size,u.quantity,u.unit_price_xof,u.total_amount_xof,u.delivery_status,u.delivered_at,u.delivery_note
       FROM invoices i JOIN students s ON s.id=i.student_id AND s.school_id=$1 LEFT JOIN classes c ON c.id=i.class_id AND c.school_id=$1 LEFT JOIN academic_years a ON a.id=i.academic_year_id AND a.school_id=$1 LEFT JOIN uniform_fee_items u ON u.invoice_id=i.id AND u.school_id=$1
-      WHERE ${filter.where} ORDER BY i.due_date,i.created_at LIMIT $${filter.values.length}`, filter.values)).rows;
+      WHERE ${filter.where} ORDER BY i.due_date,i.created_at,i.id LIMIT $${filter.values.length-1} OFFSET $${filter.values.length}`, filter.values)).rows;
   };
 
   const createDefinition = async (client, me, definition) => {
@@ -202,6 +205,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
       try {
         const targets = await resolveTargets(client, me.schoolId, { ...input, academicYearId: definition.academicYearId });
         if (!targets) { json(res, 404, { error: "Sélection d’élèves, de classes ou d’année introuvable" }); return true; }
+        if (!await validateDefinitionReferences(client, me.schoolId, definition) || (definition.classId && targets.rows.some(target => target.class_id !== definition.classId))) { json(res, 400, { error: "La sélection ne correspond pas à la classe ou aux références du frais" }); return true; }
         if (!targets.rows.length) { json(res, 400, { error: "Aucun élève actif ne correspond à cette sélection" }); return true; }
         const preview = { feeType: definition.feeType, feeTypeLabel: FEE_TYPE_LABELS[definition.feeType], academicYearId: definition.academicYearId, scope: targets.scope, studentCount: targets.rows.length, amountUnitXof: definition.amountXof, amountTotalXof: definition.amountXof * targets.rows.length, dueDate, classIds: targets.classIds, studentIds: targets.studentIds };
         if (key.endsWith("/preview")) { json(res, 200, preview); return true; }
@@ -247,7 +251,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
       if (!row) { json(res, 404, { error: "Élève introuvable" }); return true; }
       json(res, 201, row); return true;
     }
-    if (key === "GET /api/invoices") { json(res, 200, await selectInvoices(url, me.schoolId, 500)); return true; }
+    if (key === "GET /api/invoices") { const { limit, offset } = pagination(url.searchParams, { defaultLimit: 200, maxLimit: 500 }); json(res, 200, await selectInvoices(url, me.schoolId, limit, offset)); return true; }
     if (req.method === "POST" && /^\/api\/fee-assignments\/[^/]+\/adjust$/.test(url.pathname)) {
       if (!ownerOrDirector(me)) { json(res, 403, { error: "Action non autorisée" }); return true; }
       authService.requireRecentAuthentication(me);
@@ -268,6 +272,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
           adjustment = expected; resultingStatus = "exempted";
           await client.query("UPDATE invoices SET discount_xof=amount_expected_xof,amount_due_xof=0,balance_xof=0,financial_status='exempted',status='paid',exemption_reason=$1,updated_at=now() WHERE id=$2", [reason, invoiceId]);
         } else {
+          if (paid > 0) { await client.query("ROLLBACK"); json(res, 400, { error: "Annulez d’abord les paiements avant d’annuler cette échéance" }); return true; }
           resultingStatus = "cancelled";
           await client.query("UPDATE invoices SET financial_status='cancelled',status='cancelled',cancelled_at=now(),cancelled_by=$1,cancellation_reason=$2,updated_at=now() WHERE id=$3", [me.sub, reason, invoiceId]);
         }
@@ -299,6 +304,9 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
       if (!cashier(me)) { json(res, 403, { error: "Action non autorisée" }); return true; }
       authService.requireRecentAuthentication(me);
       const input = await body(req), method = oneOf(input.method, PAYMENT_METHODS), reference = safeText(input.reference || `PAY-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(Date.now()).slice(-7)}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`, { min: 3, max: 120 });
+      if (input.currency && String(input.currency).trim().toUpperCase() !== "XOF") throw new Error("invalid_body");
+      const paidAt = input.paidAt ? new Date(input.paidAt) : null;
+      if (paidAt && Number.isNaN(paidAt.getTime())) throw new Error("invalid_body");
       let allocations;
       if (Array.isArray(input.allocations)) allocations = input.allocations.map((item) => ({ invoiceId: identifier(item.invoiceId), amountXof: amountXof(item.amountXof) }));
       else allocations = [{ invoiceId: identifier(input.invoiceId), amountXof: input.amountXof ? amountXof(input.amountXof) : xofFromMinor(input.amountMinor) }];
@@ -308,7 +316,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const ids = allocations.map((item) => item.invoiceId), invoices = (await client.query("SELECT id,student_id,amount_expected_xof,discount_xof,currency,financial_status FROM invoices WHERE school_id=$1 AND id=ANY($2::uuid[]) FOR UPDATE", [me.schoolId, ids])).rows;
+        const ids = allocations.map((item) => item.invoiceId), invoices = (await client.query("SELECT id,student_id,amount_expected_xof,discount_xof,currency,financial_status FROM invoices WHERE school_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE", [me.schoolId, ids])).rows;
         if (invoices.length !== ids.length) { await client.query("ROLLBACK"); json(res, 404, { error: "Échéance introuvable" }); return true; }
         if (new Set(invoices.map((item) => item.student_id)).size !== 1) { await client.query("ROLLBACK"); json(res, 400, { error: "Un paiement ventilé doit concerner un seul élève" }); return true; }
         const receiptSnapshots = new Map();
@@ -322,7 +330,7 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
         const total = allocations.reduce((sum, item) => sum + item.amountXof, 0), studentId = invoices[0].student_id;
         const batch = (await client.query(`INSERT INTO student_payment_batches(school_id,student_id,total_amount_xof,method,reference,paid_at,recorded_by)
           VALUES($1,$2,$3,$4,$5,COALESCE($6::timestamptz,now()),$7) RETURNING id,student_id,total_amount_xof,currency,method,reference,paid_at,recorded_by,status`,
-        [me.schoolId, studentId, total, method, reference, input.paidAt || null, me.sub])).rows[0];
+        [me.schoolId, studentId, total, method, reference, paidAt?.toISOString() || null, me.sub])).rows[0];
         const inserted = [];
         for (const allocation of allocations) {
           const snapshot = receiptSnapshots.get(allocation.invoiceId);
@@ -333,8 +341,8 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
         const receipt = (await client.query("INSERT INTO receipts(school_id,payment_id,payment_batch_id,number) VALUES($1,NULL,$2,$3) RETURNING id,payment_batch_id,number,issued_at", [me.schoolId, batch.id, receiptNumber])).rows[0];
         const states = []; for (const allocation of allocations) states.push(await syncInvoice(client, me.schoolId, allocation.invoiceId));
         await audit(client, me, "student_fee_payment.created", "student_payment_batch", batch.id, { totalAmountXof: total, method, allocations: allocations.map((item) => ({ invoiceId: item.invoiceId, amountXof: item.amountXof })) });
+        await authService.securityEvent(req, { type: "student_fee_payment.created", severity: "warning", outcome: "success", userId: me.sub, schoolId: me.schoolId, metadata: { paymentBatchId: batch.id, totalAmountXof: total, allocationCount: allocations.length } }, client);
         await client.query("COMMIT");
-        await authService.securityEvent(req, { type: "student_fee_payment.created", severity: "warning", outcome: "success", userId: me.sub, schoolId: me.schoolId, metadata: { paymentBatchId: batch.id, totalAmountXof: total, allocationCount: allocations.length } });
         const first = inserted[0], firstState = states[0];
         json(res, 201, { payment: { id: first.id, student_id: studentId, invoice_id: first.invoice_id, amount_minor: minor(first.amount_xof), currency: "XOF", method, reference, paid_at: batch.paid_at, payment_batch_id: batch.id }, paymentBatch: batch, allocations: inserted, receipt, invoiceStatus: legacyStatus(firstState.financial_status), financialStatus: firstState.financial_status }); return true;
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
@@ -353,31 +361,32 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
           if (!legacy) { await client.query("ROLLBACK"); json(res, 404, { error: "Paiement confirmé introuvable" }); return true; }
           ids = legacy.invoice_id ? [legacy.invoice_id] : [];
         }
-        for (const id of ids) await syncInvoice(client, me.schoolId, id);
+        for (const id of ids.sort()) await syncInvoice(client, me.schoolId, id);
         await audit(client, me, "student_fee_payment.cancelled", "student_payment_batch", batchId, { reason, invoiceIds: ids });
         await client.query("COMMIT"); json(res, 200, { id: batchId, status: "cancelled" }); return true;
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
     }
     if (key === "GET /api/receipts") {
+      const { limit, offset } = pagination(url.searchParams, { defaultLimit: 200, maxLimit: 500 });
       const current = (await pool.query(`SELECT r.id,r.number,r.issued_at,b.id payment_batch_id,b.paid_at,(b.total_amount_xof::bigint*100)::text amount_minor,b.total_amount_xof,b.currency,b.method,b.reference,b.status,s.matricule,s.first_name,s.last_name,MAX(COALESCE(c.name,s.class_name)) class_name,sc.name school_name,u.name recorded_by_name,
         json_agg(json_build_object('invoiceId',i.id,'feeType',i.fee_type,'category',CASE i.fee_type WHEN 'tuition' THEN 'Mensualité' WHEN 'registration' THEN 'Frais d’inscription' WHEN 'uniform' THEN 'Tenue scolaire' WHEN 'transport' THEN 'Transport' ELSE 'Autre' END,'academicYear',ay.label,'description',i.description,'amountExpectedXof',COALESCE(a.amount_expected_xof_snapshot,i.amount_expected_xof),'paymentAmountXof',a.amount_xof,'totalPaidXof',COALESCE(a.total_paid_after_xof,i.amount_paid_xof),'balanceXof',COALESCE(a.balance_after_xof,i.balance_xof),'itemType',ui.item_type,'size',ui.size,'quantity',ui.quantity,'deliveryStatus',ui.delivery_status) ORDER BY i.due_date) allocations
         FROM receipts r JOIN student_payment_batches b ON b.id=r.payment_batch_id AND b.school_id=$1 JOIN students s ON s.id=b.student_id AND s.school_id=$1 JOIN schools sc ON sc.id=b.school_id JOIN users u ON u.id=b.recorded_by
         JOIN student_payment_allocations a ON a.payment_batch_id=b.id AND a.school_id=$1 JOIN invoices i ON i.id=a.invoice_id AND i.school_id=$1 LEFT JOIN classes c ON c.id=i.class_id AND c.school_id=$1 LEFT JOIN academic_years ay ON ay.id=i.academic_year_id AND ay.school_id=$1 LEFT JOIN uniform_fee_items ui ON ui.invoice_id=i.id AND ui.school_id=$1
-        WHERE r.school_id=$1 GROUP BY r.id,b.id,s.id,sc.id,u.id ORDER BY r.issued_at DESC LIMIT 500`, [me.schoolId])).rows;
+        WHERE r.school_id=$1 GROUP BY r.id,b.id,s.id,sc.id,u.id ORDER BY r.issued_at DESC,r.id DESC LIMIT $2`, [me.schoolId, limit + offset])).rows;
       const legacy = (await pool.query(`SELECT r.id,r.number,r.issued_at,p.paid_at,p.amount_minor,p.currency,p.method,p.reference,p.status,s.matricule,s.first_name,s.last_name,s.class_name,sc.name school_name,u.name recorded_by_name,
         json_build_array(json_build_object('invoiceId',i.id,'feeType',i.fee_type,'category',CASE i.fee_type WHEN 'tuition' THEN 'Mensualité' WHEN 'registration' THEN 'Frais d’inscription' WHEN 'uniform' THEN 'Tenue scolaire' WHEN 'transport' THEN 'Transport' ELSE 'Autre' END,'academicYear',ay.label,'description',i.description,'amountExpectedXof',i.amount_expected_xof,'paymentAmountXof',(p.amount_minor/100),'totalPaidXof',i.amount_paid_xof,'balanceXof',i.balance_xof)) allocations
-        FROM receipts r JOIN payments p ON p.id=r.payment_id AND p.school_id=$1 JOIN students s ON s.id=p.student_id AND s.school_id=$1 LEFT JOIN invoices i ON i.id=p.invoice_id AND i.school_id=$1 LEFT JOIN academic_years ay ON ay.id=i.academic_year_id AND ay.school_id=$1 JOIN schools sc ON sc.id=r.school_id LEFT JOIN users u ON u.id=p.recorded_by WHERE r.school_id=$1 AND r.payment_id IS NOT NULL ORDER BY r.issued_at DESC LIMIT 500`, [me.schoolId])).rows;
-      json(res, 200, [...current, ...legacy].sort((a, b) => new Date(b.issued_at) - new Date(a.issued_at)).slice(0, 500)); return true;
+        FROM receipts r JOIN payments p ON p.id=r.payment_id AND p.school_id=$1 JOIN students s ON s.id=p.student_id AND s.school_id=$1 LEFT JOIN invoices i ON i.id=p.invoice_id AND i.school_id=$1 LEFT JOIN academic_years ay ON ay.id=i.academic_year_id AND ay.school_id=$1 JOIN schools sc ON sc.id=r.school_id LEFT JOIN users u ON u.id=p.recorded_by WHERE r.school_id=$1 AND r.payment_id IS NOT NULL ORDER BY r.issued_at DESC,r.id DESC LIMIT $2`, [me.schoolId, limit + offset])).rows;
+      json(res, 200, [...current, ...legacy].sort((a, b) => new Date(b.issued_at) - new Date(a.issued_at) || b.id.localeCompare(a.id)).slice(offset, offset + limit)); return true;
     }
     if (key === "GET /api/collections/overdue") {
-      const rows = await selectInvoices(new URL(`${url.origin}${url.pathname}?status=unpaid`), me.schoolId, 500);
-      const partial = await selectInvoices(new URL(`${url.origin}${url.pathname}?status=partially_paid`), me.schoolId, 500);
-      json(res, 200, [...rows, ...partial].filter((item) => new Date(item.due_date) < new Date(new Date().toISOString().slice(0, 10))).map((item) => ({ ...item, paid_minor: minor(item.amount_paid_xof), balance_minor: minor(item.balance_xof), days_overdue: Math.floor((Date.now() - new Date(`${item.due_date}T00:00:00Z`).getTime()) / 86_400_000) }))); return true;
+      const { limit, offset } = pagination(url.searchParams, { defaultLimit: 200, maxLimit: 500 });
+      const rows = await selectInvoices(url, me.schoolId, limit, offset);
+      json(res, 200, rows.map(item => ({ ...item, paid_minor: minor(item.amount_paid_xof), balance_minor: minor(item.balance_xof), days_overdue: Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86_400_000) }))); return true;
     }
     if (key === "GET /api/reports/fees") {
       const feeType = oneOf(url.searchParams.get("feeType"), ["registration", "uniform"]), params = [me.schoolId, feeType], where = ["i.school_id=$1", "i.fee_type=$2"];
       if (url.searchParams.get("academicYearId")) { params.push(identifier(url.searchParams.get("academicYearId"))); where.push(`i.academic_year_id=$${params.length}`); }
-      const summary = (await pool.query(`WITH x AS (SELECT i.*,COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)::integer paid FROM invoices i WHERE ${where.join(" AND ")})
+      const summary = (await pool.query(`WITH x AS (SELECT i.*,COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)::bigint paid FROM invoices i WHERE ${where.join(" AND ")})
         SELECT COALESCE(sum(amount_due_xof) FILTER(WHERE financial_status<>'cancelled'),0)::text expected_xof,COALESCE(sum(paid) FILTER(WHERE financial_status<>'cancelled'),0)::text paid_xof,
         COALESCE(sum(GREATEST(amount_due_xof-paid,0)) FILTER(WHERE financial_status NOT IN ('cancelled','exempted')),0)::text balance_xof,count(DISTINCT student_id) FILTER(WHERE financial_status='paid')::int paid_students,
         count(DISTINCT student_id) FILTER(WHERE financial_status='partially_paid' OR (paid>0 AND paid<amount_due_xof))::int partial_count,count(DISTINCT student_id) FILTER(WHERE financial_status='unpaid' AND paid=0)::int unpaid_count,count(DISTINCT student_id) FILTER(WHERE financial_status='exempted')::int exempted_count FROM x`, params)).rows[0];
@@ -410,8 +419,9 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
       csv(res, "bilan-paiements-scolaires.csv", [["Date", "Matricule", "Prénom", "Nom", "Classe", "Catégorie", "Description", "Montant XOF", "Méthode", "Référence", "Reçu", "Enregistré par"], ...rows.map((item) => [item.paid_at.toISOString(), item.matricule, item.first_name, item.last_name, item.class_name, FEE_TYPE_LABELS[item.fee_type], item.description, item.amount_xof, item.method, item.reference, item.receipt, item.recorded_by_name])]); return true;
     }
     if (key === "GET /api/dashboard") {
-      const row = (await pool.query(`WITH x AS (SELECT i.*,COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)::integer paid FROM invoices i WHERE i.school_id=$1 AND i.financial_status<>'cancelled')
-        SELECT (COALESCE(sum(amount_due_xof),0)*100)::text expected,(COALESCE(sum(paid),0)*100)::text paid,count(*) FILTER(WHERE financial_status NOT IN ('paid','exempted'))::int unpaid_count FROM x`, [me.schoolId])).rows[0];
+      const row = (await pool.query(`WITH x AS (SELECT i.*,COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$1),0)::bigint paid FROM invoices i WHERE i.school_id=$1 AND i.financial_status<>'cancelled')
+        SELECT (COALESCE(sum(amount_due_xof),0)*100)::text expected,(COALESCE(sum(paid),0)*100)::text paid,count(*) FILTER(WHERE financial_status<>'exempted' AND paid<amount_due_xof)::int unpaid_count,
+        count(*)::int invoice_count,(SELECT count(*)::int FROM students WHERE school_id=$1 AND status='active') student_count FROM x`, [me.schoolId])).rows[0];
       json(res, 200, row); return true;
     }
     if (req.method === "GET" && /^\/api\/students\/[^/]+\/statement$/.test(url.pathname)) {
@@ -427,7 +437,14 @@ export function createFeeRouter({ pool, authService, body, json, csv, identifier
         FROM payments p LEFT JOIN invoices i ON i.id=p.invoice_id AND i.school_id=$2 LEFT JOIN receipts r ON r.payment_id=p.id AND r.school_id=$2 LEFT JOIN users u ON u.id=p.recorded_by
         WHERE p.student_id=$1 AND p.school_id=$2 AND p.status='confirmed' ORDER BY p.paid_at DESC LIMIT 500`, [studentId, me.schoolId])).rows;
       const payments = [...currentPayments, ...legacyPayments].sort((a, b) => new Date(b.paid_at) - new Date(a.paid_at)).slice(0, 500);
-      const summary = Object.fromEntries(FEE_TYPES.map((type) => { const rows = invoices.filter((item) => item.fee_type === type && item.financial_status !== "cancelled"); return [type, { expectedXof: rows.reduce((sum, item) => sum + Number(item.amount_due_xof), 0), paidXof: rows.reduce((sum, item) => sum + Number(item.amount_paid_xof), 0), balanceXof: rows.reduce((sum, item) => sum + Number(item.balance_xof), 0), deliveryStatuses: rows.filter((item) => item.delivery_status).map((item) => item.delivery_status) }]; }));
+      // Summaries cover the complete ledger, independently of the recent-history limit.
+      const totals = (await pool.query(`WITH ledger AS (
+        SELECT i.fee_type,i.amount_due_xof,COALESCE((SELECT sum(p.amount_minor)/100 FROM student_fee_payments p WHERE p.invoice_id=i.id AND p.school_id=$2),0) paid,u.delivery_status
+        FROM invoices i LEFT JOIN uniform_fee_items u ON u.invoice_id=i.id AND u.school_id=$2
+        WHERE i.student_id=$1 AND i.school_id=$2 AND i.financial_status<>'cancelled'
+      ) SELECT fee_type,sum(amount_due_xof)::text expected,sum(paid)::text paid,sum(GREATEST(amount_due_xof-paid,0))::text balance,
+        COALESCE(json_agg(delivery_status) FILTER(WHERE delivery_status IS NOT NULL),'[]') delivery_statuses FROM ledger GROUP BY fee_type`, [studentId, me.schoolId])).rows;
+      const summary = Object.fromEntries(FEE_TYPES.map(type => { const row = totals.find(item => item.fee_type === type); return [type, { expectedXof: Number(row?.expected || 0), paidXof: Number(row?.paid || 0), balanceXof: Number(row?.balance || 0), deliveryStatuses: row?.delivery_statuses || [] }]; }));
       json(res, 200, { student, summary, invoices, payments }); return true;
     }
     return false;

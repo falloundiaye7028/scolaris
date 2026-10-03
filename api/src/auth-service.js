@@ -56,9 +56,9 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
     userAgentHash: opaqueDigest(String(req.headers["user-agent"] || "").slice(0, 512), secret),
   });
 
-  const securityEvent = async (req, { type, severity = "info", outcome, userId = null, schoolId = null, metadata = {} }) => {
+  const securityEvent = async (req, { type, severity = "info", outcome, userId = null, schoolId = null, metadata = {} }, database = pool) => {
     const { ipHash, userAgentHash } = deviceHashes(req);
-    await pool.query(
+    await database.query(
       "INSERT INTO security_events(school_id,user_id,event_type,severity,outcome,ip_hash,user_agent_hash,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
       [schoolId, userId, type, severity, outcome, ipHash, userAgentHash, JSON.stringify(metadata)],
     );
@@ -71,19 +71,29 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
     const idleExpires = new Date(Date.now() + SESSION_IDLE_SECONDS * 1000);
     const absoluteExpires = new Date(Date.now() + SESSION_ABSOLUTE_SECONDS * 1000);
     const { ipHash, userAgentHash } = deviceHashes(req);
-    await pool.query("DELETE FROM sessions WHERE absolute_expires_at<=now() OR expires_at<=now() OR revoked_at IS NOT NULL");
-    await pool.query(
-      "INSERT INTO sessions(id,user_id,school_id,token_hash,expires_at,absolute_expires_at,reauthenticated_at,auth_method,ip_hash,user_agent_hash) VALUES($1,$2,$3,$4,$5,$6,now(),$7,$8,$9)",
-      [sessionId, user.id, user.school_id, tokenHash, idleExpires, absoluteExpires, authMethod, ipHash, userAgentHash],
-    );
-    await pool.query(
-      `UPDATE sessions SET revoked_at=now()
-       WHERE user_id=$1 AND revoked_at IS NULL AND id NOT IN (
-         SELECT id FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now()
-         ORDER BY created_at DESC LIMIT $2
-       )`,
-      [user.id, SESSION_LIMIT_PER_USER],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const active = await client.query("SELECT id FROM users WHERE id=$1 AND is_active=true FOR UPDATE", [user.id]);
+      if (!active.rowCount) throw new Error("unauthorized");
+      await client.query("DELETE FROM sessions WHERE user_id=$1 AND (absolute_expires_at<=now() OR expires_at<=now() OR revoked_at IS NOT NULL)", [user.id]);
+      await client.query(
+        "INSERT INTO sessions(id,user_id,school_id,token_hash,expires_at,absolute_expires_at,reauthenticated_at,auth_method,ip_hash,user_agent_hash) VALUES($1,$2,$3,$4,$5,$6,now(),$7,$8,$9)",
+        [sessionId, user.id, user.school_id, tokenHash, idleExpires, absoluteExpires, authMethod, ipHash, userAgentHash],
+      );
+      await client.query(
+        `UPDATE sessions SET revoked_at=now()
+         WHERE user_id=$1 AND revoked_at IS NULL AND id NOT IN (
+           SELECT id FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now()
+           ORDER BY created_at DESC LIMIT $2
+         )`,
+        [user.id, SESSION_LIMIT_PER_USER],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
     res.setHeader("set-cookie", sessionCookie(token, { secure: production }));
     return sessionId;
   };
@@ -190,6 +200,8 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
       await client.query("BEGIN");
       await client.query("UPDATE users SET password_hash=$1,password_changed_at=now() WHERE id=$2", [passwordHash, me.sub]);
       await client.query("UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL", [me.sub]);
+      await client.query("UPDATE mfa_challenges SET consumed_at=COALESCE(consumed_at,now()) WHERE user_id=$1", [me.sub]);
+      await client.query("UPDATE password_reset_tokens SET consumed_at=COALESCE(consumed_at,now()) WHERE user_id=$1", [me.sub]);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -215,12 +227,13 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
     const challengeToken = parseCookies(req.headers.cookie)[MFA_CHALLENGE_COOKIE];
     if (!challengeToken || !isOpaqueSessionToken(challengeToken)) throw new Error("invalid_mfa");
     const challenge = (await pool.query(
-      `SELECT c.id challenge_id,c.user_id,u.id,c.attempts,u.school_id,u.name,u.email,u.role,u.is_platform_admin,u.is_active,m.secret_ciphertext
-       FROM mfa_challenges c JOIN users u ON u.id=c.user_id JOIN user_mfa m ON m.user_id=u.id
-       WHERE c.challenge_hash=$1 AND c.consumed_at IS NULL AND c.expires_at>now() AND m.enabled_at IS NOT NULL`,
+      `UPDATE mfa_challenges c SET attempts=c.attempts+1 FROM users u,user_mfa m
+       WHERE u.id=c.user_id AND m.user_id=u.id AND u.is_active=true
+         AND c.challenge_hash=$1 AND c.consumed_at IS NULL AND c.expires_at>now() AND c.attempts<5 AND m.enabled_at IS NOT NULL
+       RETURNING c.id challenge_id,c.user_id,u.id,c.attempts,u.school_id,u.name,u.email,u.role,u.is_platform_admin,u.is_active,m.secret_ciphertext`,
       [opaqueDigest(challengeToken, secret)],
     )).rows[0];
-    if (!challenge || !challenge.is_active || challenge.attempts >= 5) throw new Error("invalid_mfa");
+    if (!challenge || !challenge.is_active) throw new Error("invalid_mfa");
     const totpValid = verifyTotp(decryptMfaSecret(challenge.secret_ciphertext, mfaEncryptionKey), code);
     let recoveryValid = false;
     let recoveryId;
@@ -231,14 +244,13 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
       recoveryId = recovery?.id;
     }
     if (!totpValid && !recoveryValid) {
-      await pool.query("UPDATE mfa_challenges SET attempts=attempts+1 WHERE id=$1", [challenge.challenge_id]);
       await securityEvent(req, { type: "mfa.failed", severity: "warning", outcome: "denied", userId: challenge.user_id, schoolId: challenge.school_id });
       throw new Error("invalid_mfa");
     }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const consumed = await client.query("UPDATE mfa_challenges SET consumed_at=now() WHERE id=$1 AND consumed_at IS NULL RETURNING id", [challenge.challenge_id]);
+      const consumed = await client.query("UPDATE mfa_challenges SET consumed_at=now() WHERE id=$1 AND consumed_at IS NULL AND expires_at>now() RETURNING id", [challenge.challenge_id]);
       if (!consumed.rowCount) throw new Error("invalid_mfa");
       if (recoveryId) {
         const recovered = await client.query("UPDATE mfa_recovery_codes SET used_at=now() WHERE id=$1 AND used_at IS NULL RETURNING id", [recoveryId]);
@@ -261,13 +273,14 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
     requireRecentAuthentication(me);
     if (!mfaEncryptionKey) throw new Error("mfa_unavailable");
     const secretValue = generateTotpSecret();
-    await pool.query(
+    const setup = await pool.query(
       `INSERT INTO user_mfa(user_id,secret_ciphertext,enabled_at,verified_at,updated_at)
        VALUES($1,$2,NULL,NULL,now())
-       ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,enabled_at=NULL,verified_at=NULL,updated_at=now()`,
+       ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,verified_at=NULL,updated_at=now()
+       WHERE user_mfa.enabled_at IS NULL RETURNING user_id`,
       [me.sub, encryptMfaSecret(secretValue, mfaEncryptionKey)],
     );
-    await pool.query("DELETE FROM mfa_recovery_codes WHERE user_id=$1", [me.sub]);
+    if (!setup.rowCount) throw new Error("mfa_already_enabled");
     await securityEvent(req, { type: "mfa.setup_started", outcome: "success", userId: me.sub, schoolId: me.schoolId });
     const label = encodeURIComponent(`${mfaIssuer}:${me.email}`);
     return { provisioningUri: `otpauth://totp/${label}?secret=${secretValue}&issuer=${encodeURIComponent(mfaIssuer)}&algorithm=SHA1&digits=6&period=30` };
@@ -276,15 +289,12 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
   const confirmMfaSetup = async (req, me, code) => {
     requireRecentAuthentication(me);
     if (!mfaEncryptionKey) throw new Error("mfa_unavailable");
-    const record = (await pool.query("SELECT secret_ciphertext FROM user_mfa WHERE user_id=$1 AND enabled_at IS NULL", [me.sub])).rows[0];
-    if (!record || !verifyTotp(decryptMfaSecret(record.secret_ciphertext, mfaEncryptionKey), code)) {
-      await securityEvent(req, { type: "mfa.setup_failed", severity: "warning", outcome: "denied", userId: me.sub, schoolId: me.schoolId });
-      throw new Error("invalid_mfa");
-    }
     const codes = createRecoveryCodes();
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const record = (await client.query("SELECT secret_ciphertext FROM user_mfa WHERE user_id=$1 AND enabled_at IS NULL FOR UPDATE", [me.sub])).rows[0];
+      if (!record || !verifyTotp(decryptMfaSecret(record.secret_ciphertext, mfaEncryptionKey), code)) throw new Error("invalid_mfa");
       await client.query("UPDATE user_mfa SET enabled_at=now(),verified_at=now(),updated_at=now() WHERE user_id=$1", [me.sub]);
       await client.query("DELETE FROM mfa_recovery_codes WHERE user_id=$1", [me.sub]);
       for (const recoveryCode of codes) {
@@ -311,6 +321,7 @@ export function createAuthService({ pool, secret, production, mfaEncryptionKey =
       await client.query("BEGIN");
       await client.query("DELETE FROM user_mfa WHERE user_id=$1", [me.sub]);
       await client.query("DELETE FROM mfa_recovery_codes WHERE user_id=$1", [me.sub]);
+      await client.query("UPDATE mfa_challenges SET consumed_at=COALESCE(consumed_at,now()) WHERE user_id=$1", [me.sub]);
       await client.query("UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND id<>$2 AND revoked_at IS NULL", [me.sub, me.sid]);
       await client.query("COMMIT");
     } catch (error) {

@@ -70,6 +70,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   await assert.doesNotReject(assertPreviewDatabaseIdentity(admin, previewSeedEnvironment));
   await admin.query("DELETE FROM deployment_environment_identity");
   assert.equal((await request("/app")).status, 401);
+  assert.equal((await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: "null" })).status, 400);
   const passwordHash = await bcrypt.hash("MotDePasse#2026", 12);
   const schools = await admin.query("INSERT INTO schools(name,slug,subscription_due_date) VALUES('École A','ecole-a',CURRENT_DATE+30),('École B','ecole-b',CURRENT_DATE+30) RETURNING id");
   const [schoolA, schoolB] = schools.rows.map((row) => row.id);
@@ -256,6 +257,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const m2TeacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "teacher-a@example.test", password: "MotDePasse#2026" }) });
   const m2TeacherCookie = m2TeacherLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request("/api/dashboard", { headers: { cookie: m2TeacherCookie } })).status, 403);
+  assert.equal((await request(`/api/student-guardians?studentId=${schoolAStudent}`, { headers: { cookie: m2TeacherCookie } })).status, 403);
   assert.equal((await request("/api/invoices", { headers: { cookie: m2TeacherCookie } })).status, 403);
   assert.equal((await request("/api/payments", { headers: { cookie: m2TeacherCookie } })).status, 403);
   const ownSchedule = await request("/api/timetable-entries", { headers: { cookie: m2TeacherCookie } });
@@ -319,6 +321,8 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const m3OtherTeacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 Other Teacher" }, body: JSON.stringify({ email: "teacher-a2@example.test", password: "MotDePasse#2026" }) });
   const m3OtherTeacherCookie = m3OtherTeacherLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request(`/api/attendance/sessions/${callSession.id}/roster`, { headers: { cookie: m3OtherTeacherCookie, "user-agent": "M3 Other Teacher" } })).status, 403);
+  const otherTeacherSummary = await (await request(`/api/attendance/students/${schoolAStudent}/summary?academicYearId=${currentYear.id}`, { headers: { cookie: m3OtherTeacherCookie, "user-agent": "M3 Other Teacher" } })).json();
+  assert.deepEqual(otherTeacherSummary.history, []);
   const m3AccountantLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 Accountant" }, body: JSON.stringify({ email: "caisse-a@example.test", password: "MotDePasse#2026" }) });
   const m3AccountantCookie = m3AccountantLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request("/api/attendance/history?from=2026-09-01&to=2026-09-30", { headers: { cookie: m3AccountantCookie, "user-agent": "M3 Accountant" } })).status, 403);
@@ -518,6 +522,11 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const exactClassAverage = await (await request(`/api/grade-reports?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${classAverageClass.id}`, { headers: { cookie } })).json();
   assert.deepEqual(exactClassAverage.rows.map((row) => row.general_average).sort(), ["10.00", "20.00", "20.00"]);
   assert.ok(exactClassAverage.rows.every((row) => row.class_average === "15.00"));
+  const individualAverage = await (await request(`/api/grade-reports?scope=student&academicPeriodId=${academicPeriodData.id}&studentId=${classAverageStudents[0].id}`, { headers: { cookie } })).json();
+  assert.ok(individualAverage.rows.length > 0);
+  assert.ok(individualAverage.rows.every(row => row.class_average === "15.00"));
+  const individualGrades = await (await request(`/api/students/${classAverageStudents[0].id}/grades?academicPeriodId=${academicPeriodData.id}`, { headers: { cookie } })).json();
+  assert.deepEqual(new Set(individualGrades.assessments.map(row => row.id)), new Set([averageAssessmentOne.data.id, averageAssessmentTwo.data.id]));
   assert.equal((await request(`/api/grade-reports.csv?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie } })).status, 200);
   assert.match(await (await request(`/api/grade-reports.csv?scope=class&academicPeriodId=${academicPeriodData.id}&classId=${currentClass.id}`, { headers: { cookie } })).text(), /'=Alerte/);
   await assert.rejects(admin.query("INSERT INTO grades(school_id,assessment_id,student_id,enrollment_id,status,score,entered_by) VALUES($1,$2,$3,$4,'scored',10,$5)", [schoolA, mathEvaluationOne.data.id, m3SchoolBStudent, schoolBEnrollment.id, teacherA.id]), (error) => ["23503", "P0001"].includes(error.code));
@@ -576,6 +585,9 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal(partialRegistration.status, 201);
   const partialRegistrationData = await partialRegistration.json();
   assert.equal(partialRegistrationData.financialStatus, "partially_paid");
+  const cancelPaidInvoice = await request(`/api/fee-assignments/${registrationInvoice.id}/adjust`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", reason: "Tentative avec règlement toujours confirmé" }) });
+  assert.equal(cancelPaidInvoice.status, 400);
+  await assert.rejects(admin.query("INSERT INTO student_payment_allocations(school_id,payment_batch_id,invoice_id,amount_xof) VALUES($1,$2,$3,1)", [schoolB, partialRegistrationData.paymentBatch.id, uniformInvoice.id]), error => error.code === "23503");
   const splitPayment = await request("/api/student-fee-payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ allocations: [{ invoiceId: registrationInvoice.id, amountXof: 15_000 }, { invoiceId: uniformInvoice.id, amountXof: 10_000 }], method: "Espèces", reference: "FRAIS-TEST-002" }) });
   assert.equal(splitPayment.status, 201);
   const splitPaymentData = await splitPayment.json();
@@ -706,6 +718,15 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const missingSchoolContext = await request("/api/me", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test", "x-scolaris-school-context": "00000000-0000-4000-8000-000000000000" } });
   assert.equal(missingSchoolContext.status, 404);
 
+  const contextualPresence = await request(`/api/attendance/sessions/${fixtureSessions[0].id}/records`, { method: "POST", headers: { ...schoolContextHeaders, "content-type": "application/json" }, body: JSON.stringify({ records: [{ studentId: secondStudent.id, status: "present" }] }) });
+  assert.equal(contextualPresence.status, 200);
+  const contextualAssessment = await request("/api/assessments", { method: "POST", headers: { ...schoolContextHeaders, "content-type": "application/json" }, body: JSON.stringify({ academicYearId: currentYear.id, academicPeriodId: academicPeriodData.id, teachingAssignmentId: assignment.id, assessmentTypeId: devoirType.id, title: "Évaluation par super-administrateur", assessmentDate: "2026-10-15", maximumScore: 20, coefficient: 1 }) });
+  assert.equal(contextualAssessment.status, 201);
+  const contextualAssessmentData = await contextualAssessment.json();
+  const platformId = (await admin.query("SELECT id FROM users WHERE email='platform@example.test'")).rows[0].id;
+  assert.equal((await admin.query("SELECT created_by FROM assessments WHERE id=$1", [contextualAssessmentData.id])).rows[0].created_by, platformId);
+  await assert.rejects(admin.query("UPDATE assessments SET created_by=$1 WHERE id=$2", [teacherB.id, contextualAssessmentData.id]), error => error.code === "23503");
+
   const registrationChallengeResponse = await request("/api/public/registration-challenge");
   assert.equal(registrationChallengeResponse.status, 200);
   const registrationChallenge = (await registrationChallengeResponse.json()).challenge;
@@ -776,7 +797,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await preview.json()).amountExpectedXof, 50_000);
   const underpayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountReceivedXof: 49_999, paymentMethod: "wave", paidAt: "2026-08-30" }) });
   assert.equal(underpayment.status, 400);
-  const firstSubscriptionPayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountExpectedXof: 1, amountReceivedXof: 50_000, paymentMethod: "wave", externalReference: "ABN-TEST-001", paidAt: "2026-08-30", proof: { name: "preuve.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4\n% test\n").toString("base64") } }) });
+  const firstSubscriptionPayment = await request("/api/platform/subscription-payments", { method: "POST", headers: platformAuthHeaders, body: JSON.stringify({ schoolId: registeredSchool.id, amountExpectedXof: 1, amountReceivedXof: 50_000, paymentMethod: "wave", externalReference: "ABN-TEST-001", paidAt: "2026-08-30", proof: { name: "preuve.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4\n% test\n" + " ".repeat(20_000)).toString("base64") } }) });
   assert.equal(firstSubscriptionPayment.status, 201);
   const firstPayment = await firstSubscriptionPayment.json();
   assert.equal(Number(firstPayment.amount_expected_xof), 50_000);
@@ -792,11 +813,14 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.ok((await periodPayments.json()).length >= 2);
   assert.equal((await request("/api/platform/subscription-payments?from=2026-09-01&to=2026-08-01", { headers: { cookie: platformCookie, "user-agent": "Platform Integration Test" } })).status, 400);
   assert.equal((await request(`/api/platform/clients/${registeredSchool.id}/subscription`, { method: "PUT", headers: platformAuthHeaders, body: JSON.stringify({ action: "suspend" }) })).status, 200);
+  assert.equal((await request("/api/cron/subscriptions", { headers: { authorization: "Bearer integration-cron-secret" } })).status, 200);
+  assert.equal((await admin.query("SELECT subscription_status FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].subscription_status, "suspended");
   assert.equal((await request(`/api/platform/clients/${registeredSchool.id}/subscription`, { method: "PUT", headers: platformAuthHeaders, body: JSON.stringify({ action: "reactivate" }) })).status, 200);
 
   await admin.query("UPDATE school_subscriptions SET status='active',paid_until=now()+interval '2 days',grace_period_end=now()+interval '9 days' WHERE school_id=$1", [schoolA]);
   await admin.query("UPDATE school_subscriptions SET status='active',paid_until=now()-interval '1 day',grace_period_end=now()+interval '6 days' WHERE school_id=$1", [registeredSchool.id]);
   await admin.query("UPDATE schools SET subscription_status='active' WHERE id=$1", [registeredSchool.id]);
+  assert.equal((await request("/api/students", { method: "POST", headers: { cookie: registeredCookie, "user-agent": "Registered School Test", "content-type": "application/json" }, body: JSON.stringify({ firstName: "Before", lastName: "Cron" }) })).status, 403);
   assert.equal((await request("/api/cron/subscriptions", { headers: { authorization: "Bearer integration-cron-secret" } })).status, 200);
   assert.equal((await admin.query("SELECT count(*)::int total FROM subscription_notifications WHERE school_id=$1 AND event_type='expiry_reminder'", [schoolA])).rows[0].total, 1);
   assert.equal((await admin.query("SELECT subscription_status FROM schools WHERE id=$1", [registeredSchool.id])).rows[0].subscription_status, "grace_period");
@@ -829,6 +853,49 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const formulaCsv = Buffer.from("prénom,nom\n=HYPERLINK(\"https://evil.example\"),Test", "utf8").toString("base64");
   const maliciousImport = await request("/api/students/import", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ fileName: "eleves.csv", mimeType: "text/csv", fileBase64: formulaCsv, preview: true }) });
   assert.equal(maliciousImport.status, 400);
+  const largeCsv = "prenom,nom\n" + Array.from({ length: 300 }, (_, i) => `Élève ${i},Nom assez long pour dépasser la limite antérieure`).join("\n");
+  const largeImport = await request("/api/students/import", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ fileName: "eleves.csv", mimeType: "text/csv", fileBase64: Buffer.from(largeCsv).toString("base64"), preview: true }) });
+  assert.equal(largeImport.status, 200);
+  assert.equal((await largeImport.json()).valid, 300);
+  const invoicePageOne = await (await request("/api/invoices?limit=1&offset=0", { headers: { cookie } })).json();
+  const invoicePageTwo = await (await request("/api/invoices?limit=1&offset=1", { headers: { cookie } })).json();
+  assert.equal(invoicePageOne.length, 1);
+  assert.equal(invoicePageTwo.length, 1);
+  assert.notEqual(invoicePageOne[0].id, invoicePageTwo[0].id);
+  const totalDiscountInvoice = await (await request("/api/invoices", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, label: "Remise totale", amountXof: 1000, dueDate }) })).json();
+  assert.equal((await request(`/api/fee-assignments/${totalDiscountInvoice.id}/adjust`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "discount", discountPercent: 100, reason: "Remise totale validée par la direction" }) })).status, 200);
+  const discounted = await (await request(`/api/invoices?studentId=${schoolAStudent}`, { headers: { cookie } })).json();
+  assert.equal(discounted.find(row => row.id === totalDiscountInvoice.id).financial_status, "paid");
+  const largeInvoice = await (await request("/api/invoices", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ studentId: schoolAStudent, label: "Montant au-delà de int32", amountXof: 3_000_000_000, dueDate }) })).json();
+  const largePayment = await request("/api/payments", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ invoiceId: largeInvoice.id, amountXof: 3_000_000_000, method: "Virement", reference: "LARGE-INTEGER-TEST" }) });
+  assert.equal(largePayment.status, 201);
+  const totals = await request("/api/dashboard", { headers: { cookie } });
+  assert.equal(totals.status, 200);
+  assert.ok(Number((await totals.json()).paid) >= 300_000_000_000);
+
+  const ledgerStudent = (await admin.query("INSERT INTO students(school_id,matricule,first_name,last_name) VALUES($1,'LEDGER-501','Historique','Complet') RETURNING id", [schoolA])).rows[0];
+  await admin.query("INSERT INTO invoices(school_id,student_id,label,amount_minor,currency,due_date,fee_type,amount_expected_xof,amount_due_xof,balance_xof) SELECT $1,$2,'Historique '||n,10000,'XOF',CURRENT_DATE-1,'other',100,100,100 FROM generate_series(1,501) n", [schoolA, ledgerStudent.id]);
+  const fullStatement = await (await request(`/api/students/${ledgerStudent.id}/statement`, { headers: { cookie } })).json();
+  assert.equal(fullStatement.invoices.length, 500);
+  assert.equal(fullStatement.summary.other.expectedXof, 50100);
+  assert.equal(fullStatement.summary.other.balanceXof, 50100);
+  const overdueLastPage = await (await request(`/api/collections/overdue?studentId=${ledgerStudent.id}&limit=500&offset=500`, { headers: { cookie } })).json();
+  assert.equal(overdueLastPage.length, 1);
+  assert.equal(overdueLastPage[0].days_overdue, 1);
+  const receiptsFirst = await (await request("/api/receipts?limit=1&offset=0", { headers: { cookie } })).json();
+  const receiptsNext = await (await request("/api/receipts?limit=1&offset=1", { headers: { cookie } })).json();
+  assert.equal(receiptsFirst.length, 1);
+  assert.equal(receiptsNext.length, 1);
+  assert.notEqual(receiptsFirst[0].id, receiptsNext[0].id);
+
+  const auditGuardian = (await admin.query("INSERT INTO guardians(school_id,full_name) VALUES($1,'Parent audit fictif') RETURNING id", [schoolA])).rows[0];
+  await admin.query("INSERT INTO student_guardians(school_id,student_id,guardian_id,relationship) VALUES($1,$2,$3,'parent')", [schoolA, schoolAStudent, auditGuardian.id]);
+  const parentLink = await (await request("/api/parent-links", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ guardianId: auditGuardian.id }) })).json();
+  const parentOverview = await (await request("/api/parent/access", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessCode: parentLink.accessCode }) })).json();
+  const parentUniform = parentOverview.students.flatMap(row => row.invoices).find(row => row.id === uniformInvoice.id);
+  assert.equal(parentUniform.amountMinor, "2500000");
+  const unlinkedGuardian = (await admin.query("INSERT INTO guardians(school_id,full_name) VALUES($1,'Parent non lié fictif') RETURNING id", [schoolA])).rows[0];
+  assert.equal((await request("/api/reminders", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ guardianId: unlinkedGuardian.id, invoiceId: invoice.id, channel: "email", message: "Rappel fictif" }) })).status, 404);
 
   const teacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "teacher-a@example.test", password: "MotDePasse#2026" }) });
   const teacherCookie = teacherLogin.headers.get("set-cookie").split(";")[0];
@@ -872,6 +939,8 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const mfaConfirm = await request("/api/auth/mfa/confirm", { method: "POST", headers: { cookie: currentCookie, "user-agent": "Session Test 5", "content-type": "application/json" }, body: JSON.stringify({ code: totp(mfaSecret) }) });
   assert.equal(mfaConfirm.status, 200);
   const recoveryCodes = (await mfaConfirm.json()).recoveryCodes;
+  assert.equal((await request("/api/auth/mfa/setup", { method: "POST", headers: { cookie: currentCookie, "user-agent": "Session Test 5", "content-type": "application/json" }, body: "{}" })).status, 409);
+  assert.equal((await request("/api/me", { headers: { cookie: currentCookie, "user-agent": "Session Test 5" } }).then(response => response.json())).mfaEnabled, true);
   assert.equal(recoveryCodes.length, 10);
   const challenged = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "MFA Test" }, body: JSON.stringify({ email: "direction-a@example.test", password: "MotDePasse#2026" }) });
   assert.equal(challenged.status, 202);
@@ -879,6 +948,12 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const completed = await request("/api/auth/mfa", { method: "POST", headers: { cookie: challengeCookie, "content-type": "application/json", "user-agent": "MFA Test" }, body: JSON.stringify({ code: recoveryCodes[0] }) });
   assert.equal(completed.status, 200);
   assert.equal((await request("/api/auth/mfa", { method: "POST", headers: { cookie: challengeCookie, "content-type": "application/json", "user-agent": "MFA Test" }, body: JSON.stringify({ code: recoveryCodes[0] }) })).status, 401);
+  const limitedMfaLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "MFA concurrency" }, body: JSON.stringify({ email: "direction-a@example.test", password: "MotDePasse#2026" }) });
+  const limitedMfaCookie = limitedMfaLogin.headers.get("set-cookie").split(";")[0];
+  const parallelAttempts = await Promise.all(Array.from({ length: 10 }, () => request("/api/auth/mfa", { method: "POST", headers: { cookie: limitedMfaCookie, "content-type": "application/json", "user-agent": "MFA concurrency" }, body: JSON.stringify({ code: "invalid-code" }) })));
+  assert.ok(parallelAttempts.every(response => response.status === 401));
+  const challengeHash = crypto.createHmac("sha256", process.env.JWT_SECRET).update(limitedMfaCookie.split("=")[1]).digest("hex");
+  assert.equal((await admin.query("SELECT attempts FROM mfa_challenges WHERE challenge_hash=$1", [challengeHash])).rows[0].attempts, 5);
   assert.equal((await request("/api/auth/mfa", { method: "DELETE", headers: { cookie: currentCookie, "user-agent": "Session Test 5", "content-type": "application/json" }, body: JSON.stringify({ password: "MotDePasse#2026" }) })).status, 200);
   const changed = await request("/api/auth/password/change", { method: "POST", headers: { cookie: currentCookie, "user-agent": "Session Test 5", "content-type": "application/json" }, body: JSON.stringify({ currentPassword: "MotDePasse#2026", newPassword: "NouveauMotDePasse2026!" }) });
   assert.equal(changed.status, 200);
@@ -889,4 +964,9 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "direction-a@example.test", password: "NouveauMotDePasse2026!" }) })).status, 200);
   const leakedLogs = Number((await admin.query("SELECT count(*) total FROM security_events WHERE metadata::text ILIKE ANY(ARRAY['%MotDePasse%','%NouveauMotDePasse%','%scolaris_session%','%direction-a@example.test%'])")).rows[0].total);
   assert.equal(leakedLogs, 0);
+  // A cold start must remain safe after a platform administrator has acted in a school.
+  const { applySchema } = await import("../src/schema-service.js");
+  const migrationPool = new pg.Pool({ connectionString: databaseUrl });
+  try { await applySchema(migrationPool); } finally { await migrationPool.end(); }
+
 });

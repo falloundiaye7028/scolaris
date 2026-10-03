@@ -107,3 +107,11 @@ export function subscriptionStatusAt({ paidUntil, gracePeriodEnd, isExempt = fal
 export function registrationMessage() {
   return "Si les informations peuvent être enregistrées, les instructions de confirmation seront envoyées.";
 }
+
+// Manual suspensions and review states take precedence over calendar expiry.
+export function schoolAccessStatus(row, now = new Date()) {
+  if (!row) return "pending_payment";
+  const status = row.school_status ?? row.subscription_status;
+  if (!["active", "grace_period"].includes(status)) return status;
+  return subscriptionStatusAt({ paidUntil: row.paid_until, gracePeriodEnd: row.grace_period_end, isExempt: row.is_exempt }, now);
+}
