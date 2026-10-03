@@ -2,6 +2,7 @@
 const form = document.getElementById("parentForm");
 const status = document.getElementById("parentStatus");
 const result = document.getElementById("parentResult");
+const money = (minor, currency) => new Intl.NumberFormat("fr-SN", { style: "currency", currency: currency.trim() }).format(Number(minor) / 100);
 const addText = (parent, tag, text) => { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; };
 
 form.addEventListener("submit", async (event) => {
@@ -23,7 +24,7 @@ form.addEventListener("submit", async (event) => {
       article.className = "hero-card";
       addText(article, "h3", `${student.first_name} ${student.last_name}`);
       addText(article, "p", `Matricule : ${student.matricule} · Classe : ${student.class_name || "—"}`);
-      for (const invoice of student.invoices || []) addText(article, "p", `${invoice.label} — ${invoice.paidMinor}/${invoice.amountMinor} ${invoice.currency}`);
+      for (const invoice of student.invoices || []) addText(article, "p", `${invoice.label} — ${money(invoice.paidMinor, invoice.currency)} réglés sur ${money(invoice.amountMinor, invoice.currency)}`);
       result.append(article);
     }
     form.reset();

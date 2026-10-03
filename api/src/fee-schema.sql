@@ -184,3 +184,93 @@ UNION ALL
 SELECT a.id,b.school_id,b.student_id,a.invoice_id,(a.amount_xof::bigint*100) amount_minor,b.currency,b.method,b.reference,b.paid_at
 FROM student_payment_allocations a JOIN student_payment_batches b ON b.id=a.payment_batch_id
 WHERE b.status='confirmed';
+
+-- Financial links must remain in the same school even outside the HTTP router.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fee_definitions_school_id ON fee_definitions(school_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_school_id ON invoices(school_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_batches_school_id ON student_payment_batches(school_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_school_id ON payments(school_id,id);
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fee_definitions_school_academic_year_id_fkey') THEN
+    ALTER TABLE fee_definitions ADD CONSTRAINT fee_definitions_school_academic_year_id_fkey FOREIGN KEY(school_id,academic_year_id) REFERENCES academic_years(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE fee_definitions VALIDATE CONSTRAINT fee_definitions_school_academic_year_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fee_definitions_school_class_id_fkey') THEN
+    ALTER TABLE fee_definitions ADD CONSTRAINT fee_definitions_school_class_id_fkey FOREIGN KEY(school_id,class_id) REFERENCES classes(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE fee_definitions VALIDATE CONSTRAINT fee_definitions_school_class_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='invoices_school_student_id_fkey') THEN
+    ALTER TABLE invoices ADD CONSTRAINT invoices_school_student_id_fkey FOREIGN KEY(school_id,student_id) REFERENCES students(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE invoices VALIDATE CONSTRAINT invoices_school_student_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='invoices_school_academic_year_id_fkey') THEN
+    ALTER TABLE invoices ADD CONSTRAINT invoices_school_academic_year_id_fkey FOREIGN KEY(school_id,academic_year_id) REFERENCES academic_years(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE invoices VALIDATE CONSTRAINT invoices_school_academic_year_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='invoices_school_class_id_fkey') THEN
+    ALTER TABLE invoices ADD CONSTRAINT invoices_school_class_id_fkey FOREIGN KEY(school_id,class_id) REFERENCES classes(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE invoices VALIDATE CONSTRAINT invoices_school_class_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='invoices_school_fee_definition_id_fkey') THEN
+    ALTER TABLE invoices ADD CONSTRAINT invoices_school_fee_definition_id_fkey FOREIGN KEY(school_id,fee_definition_id) REFERENCES fee_definitions(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE invoices VALIDATE CONSTRAINT invoices_school_fee_definition_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='student_payment_batches_school_student_id_fkey') THEN
+    ALTER TABLE student_payment_batches ADD CONSTRAINT student_payment_batches_school_student_id_fkey FOREIGN KEY(school_id,student_id) REFERENCES students(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE student_payment_batches VALIDATE CONSTRAINT student_payment_batches_school_student_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='student_payment_allocations_school_payment_batch_id_fkey') THEN
+    ALTER TABLE student_payment_allocations ADD CONSTRAINT student_payment_allocations_school_payment_batch_id_fkey FOREIGN KEY(school_id,payment_batch_id) REFERENCES student_payment_batches(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE student_payment_allocations VALIDATE CONSTRAINT student_payment_allocations_school_payment_batch_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='student_payment_allocations_school_invoice_id_fkey') THEN
+    ALTER TABLE student_payment_allocations ADD CONSTRAINT student_payment_allocations_school_invoice_id_fkey FOREIGN KEY(school_id,invoice_id) REFERENCES invoices(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE student_payment_allocations VALIDATE CONSTRAINT student_payment_allocations_school_invoice_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='uniform_fee_items_school_invoice_id_fkey') THEN
+    ALTER TABLE uniform_fee_items ADD CONSTRAINT uniform_fee_items_school_invoice_id_fkey FOREIGN KEY(school_id,invoice_id) REFERENCES invoices(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE uniform_fee_items VALIDATE CONSTRAINT uniform_fee_items_school_invoice_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='uniform_delivery_events_school_invoice_id_fkey') THEN
+    ALTER TABLE uniform_delivery_events ADD CONSTRAINT uniform_delivery_events_school_invoice_id_fkey FOREIGN KEY(school_id,invoice_id) REFERENCES invoices(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE uniform_delivery_events VALIDATE CONSTRAINT uniform_delivery_events_school_invoice_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fee_adjustments_school_invoice_id_fkey') THEN
+    ALTER TABLE fee_adjustments ADD CONSTRAINT fee_adjustments_school_invoice_id_fkey FOREIGN KEY(school_id,invoice_id) REFERENCES invoices(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE fee_adjustments VALIDATE CONSTRAINT fee_adjustments_school_invoice_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='receipts_school_payment_batch_id_fkey') THEN
+    ALTER TABLE receipts ADD CONSTRAINT receipts_school_payment_batch_id_fkey FOREIGN KEY(school_id,payment_batch_id) REFERENCES student_payment_batches(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE receipts VALIDATE CONSTRAINT receipts_school_payment_batch_id_fkey;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='receipts_school_payment_id_fkey') THEN
+    ALTER TABLE receipts ADD CONSTRAINT receipts_school_payment_id_fkey FOREIGN KEY(school_id,payment_id) REFERENCES payments(school_id,id) ON DELETE RESTRICT NOT VALID;
+    ALTER TABLE receipts VALIDATE CONSTRAINT receipts_school_payment_id_fkey;
+  END IF;
+END $$;

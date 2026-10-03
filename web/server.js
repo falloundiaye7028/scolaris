@@ -1,5 +1,6 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const files = {
   "/": ["index.html", "text/html; charset=utf-8"],
@@ -25,11 +26,26 @@ const files = {
   "/banniere-scolaris-pay.png": ["banniere-scolaris-pay.png", "image/png"],
   "/robots.txt": ["robots.txt", "text/plain; charset=utf-8"],
   "/sitemap.xml": ["sitemap.xml", "application/xml; charset=utf-8"],
+  "/og-scolaris-pay.png": ["og-scolaris-pay.png", "image/png"],
+  "/.well-known/security.txt": [".well-known/security.txt", "text/plain; charset=utf-8"],
 };
 
-http.createServer(async (req, res) => {
+export function createWebServer({ apiPort = Number(process.env.SCOLARIS_API_PORT || 3000) } = {}) {
+ return http.createServer(async (req, res) => {
+  try {
   const pathname = new URL(req.url, "http://localhost").pathname;
-  const entry = files[pathname];
+  if (pathname === "/app" || pathname === "/api" || pathname.startsWith("/api/")) {
+    const upstream = http.request({ hostname: "127.0.0.1", port: apiPort, path: req.url, method: req.method,
+      headers: { ...req.headers, "x-forwarded-host": req.headers.host, "x-forwarded-proto": "http" } }, response => {
+      res.writeHead(response.statusCode, response.headers);
+      response.pipe(res);
+    });
+    upstream.on("error", () => { if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "API locale indisponible. Démarrez npm --prefix api run dev." })); });
+    req.pipe(upstream);
+    return;
+  }
+  if (!["GET", "HEAD"].includes(req.method)) { res.writeHead(405, { allow: "GET, HEAD" }); return res.end(); }
+  const entry = Object.hasOwn(files, pathname) ? files[pathname] : null;
   if (!entry) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     return res.end("Page introuvable");
@@ -37,5 +53,11 @@ http.createServer(async (req, res) => {
   const [name, contentType] = entry;
   const body = await readFile(new URL(`./${name}`, import.meta.url));
   res.writeHead(200, { "content-type": contentType, "x-content-type-options": "nosniff" });
-  res.end(body);
-}).listen(5173, "127.0.0.1", () => console.log("SCOLARIS Web : http://127.0.0.1:5173"));
+  res.end(req.method === "HEAD" ? undefined : body);
+  } catch { res.writeHead(500, { "content-type": "text/plain; charset=utf-8" }); res.end("Page indisponible"); }
+ });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  createWebServer().listen(5173, "127.0.0.1", () => console.log("SCOLARIS Web : http://127.0.0.1:5173"));
+}

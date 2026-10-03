@@ -82,7 +82,6 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         JOIN subject_policies policy USING(class_id,subject_id)
         JOIN grades grade ON grade.assessment_id=published.id AND grade.school_id=$1
         JOIN students student ON student.id=grade.student_id AND student.school_id=$1
-        WHERE ($4::uuid IS NULL OR grade.student_id=$4)
       ), subject_rows AS (
         SELECT student_id,matricule,first_name,last_name,class_id,subject_id,subject_name,subject_coefficient,
           sum(effective_ratio*coefficient)/NULLIF(sum(coefficient) FILTER(WHERE effective_ratio IS NOT NULL),0) subject_average_ratio,
@@ -94,14 +93,15 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
       ), class_averages AS (
         SELECT class_id,avg(general_average_ratio) class_average_ratio FROM student_averages GROUP BY class_id
       )
-      SELECT subject_rows.student_id,subject_rows.matricule,subject_rows.first_name,subject_rows.last_name,subject_rows.class_id,
+      , complete_report AS (SELECT subject_rows.student_id,subject_rows.matricule,subject_rows.first_name,subject_rows.last_name,subject_rows.class_id,
         subject_rows.subject_id,subject_rows.subject_name,subject_rows.subject_coefficient,report_policy.scale_max,
         subject_rows.result_count,subject_rows.evaluation_count,
         round(subject_rows.subject_average_ratio*report_policy.scale_max,report_policy.rounding_precision::int) subject_average,
         round(student_averages.general_average_ratio*report_policy.scale_max,report_policy.rounding_precision::int) general_average,
         round(avg(subject_rows.subject_average_ratio) OVER(PARTITION BY subject_rows.class_id,subject_rows.subject_id)*report_policy.scale_max,report_policy.rounding_precision::int) class_subject_average,
         round(class_averages.class_average_ratio*report_policy.scale_max,report_policy.rounding_precision::int) class_average
-      FROM subject_rows JOIN student_averages USING(student_id,class_id) JOIN class_averages USING(class_id) CROSS JOIN report_policy
+      FROM subject_rows JOIN student_averages USING(student_id,class_id) JOIN class_averages USING(class_id) CROSS JOIN report_policy)
+      SELECT * FROM complete_report WHERE ($4::uuid IS NULL OR student_id=$4)
       ORDER BY last_name,first_name,subject_name`, [me.schoolId, academicPeriodId, classId, studentId, subjectId, me.role === "teacher" ? me.sub : null]);
     if (me.role !== "teacher") return result.rows;
     return result.rows.map(({ general_average: authorized_average, class_average: authorized_class_average, ...row }) => ({
@@ -275,9 +275,10 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
 
     const workflowMatch = url.pathname.match(/^\/api\/assessments\/([^/]+)\/(publish|lock|reopen|cancel)$/);
     if (req.method === "POST" && workflowMatch) {
-      const id = identifier(workflowMatch[1]), action = workflowMatch[2], input = await body(req), expectedVersion = version(input.expectedVersion), client = await pool.connect();
+      const id = identifier(workflowMatch[1]), action = workflowMatch[2], input = await body(req), expectedVersion = version(input.expectedVersion);
       const allowed = { publish: "assessments.publish", lock: "assessments.lock", reopen: "assessments.reopen", cancel: "assessments.update" }[action];
       if (!hasPermission(me.role, allowed)) { json(res, 403, { error: "Action non autorisée" }); return true; }
+      const client = await pool.connect();
       try {
         await client.query("BEGIN"); const checked = await assessmentFor(client, me, id, { lock: true });
         if (sendCheckedError(res, checked)) { await client.query("ROLLBACK"); return true; }
@@ -346,7 +347,7 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         entered.name entered_by_name,updated.name updated_by_name
         FROM enrollments enrollment JOIN students student ON student.id=enrollment.student_id AND student.school_id=enrollment.school_id
         LEFT JOIN grades grade ON grade.school_id=enrollment.school_id AND grade.assessment_id=$1 AND grade.student_id=student.id
-        LEFT JOIN users entered ON entered.id=grade.entered_by AND entered.school_id=grade.school_id LEFT JOIN users updated ON updated.id=grade.updated_by AND updated.school_id=grade.school_id
+        LEFT JOIN users entered ON entered.id=grade.entered_by LEFT JOIN users updated ON updated.id=grade.updated_by
         WHERE enrollment.school_id=$2 AND enrollment.academic_year_id=$3 AND enrollment.class_id=$4 AND enrollment.status IN ('active','completed') AND enrollment.enrolled_at<=$5
         ORDER BY student.last_name,student.first_name,student.matricule`, [id, me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.assessment_date])).rows;
       json(res, 200, { assessment: checked.row, students }); return true;
@@ -449,7 +450,7 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         FROM grade_events event JOIN grades grade ON grade.id=event.grade_id AND grade.school_id=event.school_id
         JOIN assessments assessment ON assessment.id=grade.assessment_id AND assessment.school_id=grade.school_id
         JOIN teaching_assignments assignment ON assignment.id=assessment.teaching_assignment_id AND assignment.school_id=assessment.school_id
-        JOIN users user_account ON user_account.id=event.changed_by AND user_account.school_id=event.school_id
+        JOIN users user_account ON user_account.id=event.changed_by
         WHERE event.school_id=$1 AND event.grade_id=$2 AND ($3::uuid IS NULL OR assignment.teacher_id=$3) ORDER BY event.created_at DESC LIMIT 200`, [me.schoolId, gradeId, me.role === "teacher" ? me.sub : null])).rows;
       if (!rows.length && !(await pool.query("SELECT 1 FROM grades WHERE id=$1 AND school_id=$2", [gradeId, me.schoolId])).rowCount) json(res, 404, { error: "Note introuvable" });
       else json(res, 200, rows); return true;
@@ -520,6 +521,7 @@ export function createGradesRouter({ pool, authService, body, json, csv, identif
         JOIN LATERAL (SELECT * FROM assessment_publication_snapshots publication WHERE publication.school_id=assessment.school_id AND publication.assessment_id=assessment.id ORDER BY publication.version DESC LIMIT 1) snapshot ON true
         LEFT JOIN grades grade ON grade.assessment_id=assessment.id AND grade.school_id=assessment.school_id AND grade.student_id=$3
         WHERE assessment.school_id=$1 AND assessment.academic_period_id=$2 AND assessment.status IN('published','locked')
+          AND EXISTS(SELECT 1 FROM enrollments enrollment WHERE enrollment.school_id=assessment.school_id AND enrollment.student_id=$3 AND enrollment.academic_year_id=assessment.academic_year_id AND enrollment.class_id=assignment.class_id AND enrollment.status IN('active','completed') AND enrollment.enrolled_at<=assessment.assessment_date)
           AND ($4::uuid IS NULL OR assignment.teacher_id=$4) ORDER BY assessment.assessment_date,subject.name,assessment.title`, [me.schoolId, academicPeriodId, studentId, me.role === "teacher" ? me.sub : null])).rows;
       json(res, 200, { studentId, academicPeriodId, rows, assessments }); return true;
     }

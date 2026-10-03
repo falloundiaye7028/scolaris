@@ -145,7 +145,7 @@ export function createAttendanceRouter({ pool, body, json, csv, binary, identifi
         marker.name marked_by_name,updater.name updated_by_name
         FROM enrollments enrollment JOIN students student ON student.id=enrollment.student_id AND student.school_id=enrollment.school_id
         LEFT JOIN attendance_records record ON record.school_id=enrollment.school_id AND record.lesson_session_id=$1 AND record.student_id=student.id
-        LEFT JOIN users marker ON marker.id=record.marked_by AND marker.school_id=record.school_id LEFT JOIN users updater ON updater.id=record.updated_by AND updater.school_id=record.school_id
+        LEFT JOIN users marker ON marker.id=record.marked_by LEFT JOIN users updater ON updater.id=record.updated_by
         WHERE enrollment.school_id=$2 AND enrollment.academic_year_id=$3 AND enrollment.class_id=$4 AND enrollment.status IN ('active','completed') AND enrollment.enrolled_at<=$5
         ORDER BY student.last_name,student.first_name,student.matricule`, [id, me.schoolId, checked.row.academic_year_id, checked.row.class_id, checked.row.session_date])).rows;
       json(res, 200, { session: checked.row, students }); return true;
@@ -237,7 +237,7 @@ export function createAttendanceRouter({ pool, body, json, csv, binary, identifi
         FROM attendance_records record JOIN lesson_sessions session ON session.id=record.lesson_session_id AND session.school_id=record.school_id
         JOIN teaching_assignments assignment ON assignment.id=session.teaching_assignment_id AND assignment.school_id=session.school_id JOIN classes class ON class.id=assignment.class_id AND class.school_id=session.school_id
         JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=session.school_id JOIN students student ON student.id=record.student_id AND student.school_id=record.school_id
-        JOIN users marker ON marker.id=record.marked_by AND marker.school_id=record.school_id LEFT JOIN users updater ON updater.id=record.updated_by AND updater.school_id=record.school_id
+        JOIN users marker ON marker.id=record.marked_by LEFT JOIN users updater ON updater.id=record.updated_by
         WHERE record.school_id=$1 AND session.session_date BETWEEN $2 AND $3 AND ($4::uuid IS NULL OR assignment.class_id=$4) AND ($5::uuid IS NULL OR record.student_id=$5)
           AND ($6::text IS NULL OR record.status=$6) AND ($7::uuid IS NULL OR assignment.teacher_id=$7)
         ORDER BY session.session_date DESC,session.start_time DESC,student.last_name LIMIT 5000`, [me.schoolId, from, to, classId, studentId, status, teacherId])).rows;
@@ -252,7 +252,8 @@ export function createAttendanceRouter({ pool, body, json, csv, binary, identifi
         FROM attendance_records record JOIN lesson_sessions session ON session.id=record.lesson_session_id AND session.school_id=record.school_id
         JOIN teaching_assignments assignment ON assignment.id=session.teaching_assignment_id AND assignment.school_id=session.school_id JOIN subjects subject ON subject.id=assignment.subject_id AND subject.school_id=session.school_id
         JOIN classes class ON class.id=assignment.class_id AND class.school_id=session.school_id WHERE record.school_id=$1 AND record.student_id=$2 AND session.session_date BETWEEN $3 AND $4
-        ORDER BY session.session_date DESC,session.start_time DESC LIMIT 30`, [me.schoolId, studentId, report.from, report.to])).rows;
+          AND ($5::uuid IS NULL OR assignment.teacher_id=$5)
+        ORDER BY session.session_date DESC,session.start_time DESC LIMIT 30`, [me.schoolId, studentId, report.from, report.to, me.role === "teacher" ? me.sub : null])).rows;
       json(res, 200, { ...report, history: recent }); return true;
     }
     if (route === "GET /api/attendance/reports" || route === "GET /api/attendance/reports.csv") {

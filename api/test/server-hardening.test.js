@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+const schemaService = await readFile(new URL("../src/schema-service.js", import.meta.url), "utf8");
 const academicService = await readFile(new URL("../src/academic-service.js", import.meta.url), "utf8");
 const timetableService = await readFile(new URL("../src/timetable-service.js", import.meta.url), "utf8");
 const attendanceService = await readFile(new URL("../src/attendance-service.js", import.meta.url), "utf8");
@@ -33,7 +34,7 @@ test("le super-administrateur est explicite et les relations tenant sont vérifi
 
 test("le domaine académique est isolé et l'année courante est transactionnelle", () => {
   assert.match(server, /createAcademicRouter/);
-  assert.match(server, /academic-schema\.sql/);
+  assert.match(schemaService, /academic-schema\.sql/);
   assert.match(academicService, /pg_advisory_xact_lock/);
   assert.match(academicService, /academic_year\.current_changed/);
   assert.match(academicService, /GET \/api\/enrollments/);
@@ -42,7 +43,7 @@ test("le domaine académique est isolé et l'année courante est transactionnell
 
 test("M2 sérialise les calendriers et explique les conflits", () => {
   assert.match(server, /createTimetableRouter/);
-  assert.match(server, /timetable-schema\.sql/);
+  assert.match(schemaService, /timetable-schema\.sql/);
   assert.match(timetableService, /pg_advisory_xact_lock/);
   assert.match(timetableService, /entry\.start_time<\$7::time AND entry\.end_time>\$6::time/);
   assert.match(timetableService, /enseigne déjà en/);
@@ -53,7 +54,7 @@ test("M2 sérialise les calendriers et explique les conflits", () => {
 
 test("M3 sérialise les appels, contrôle l'enseignant et agrège sans N+1", () => {
   assert.match(server, /createAttendanceRouter/);
-  assert.match(server, /attendance-schema\.sql/);
+  assert.match(schemaService, /attendance-schema\.sql/);
   assert.match(attendanceService, /pg_advisory_xact_lock/);
   assert.match(attendanceService, /Cette séance n’est pas affectée à cet enseignant/);
   assert.match(attendanceService, /jsonb_to_recordset/);
@@ -65,7 +66,7 @@ test("M3 sérialise les appels, contrôle l'enseignant et agrège sans N+1", () 
 
 test("M4 sérialise les notes, contrôle l'affectation et calcule en NUMERIC", () => {
   assert.match(server, /createGradesRouter/);
-  assert.match(server, /grades-schema\.sql/);
+  assert.match(schemaService, /grades-schema\.sql/);
   assert.match(gradesService, /pg_advisory_xact_lock/);
   assert.match(gradesService, /Cette évaluation n’est pas affectée à cet enseignant/);
   assert.match(gradesService, /jsonb_to_recordset/);
