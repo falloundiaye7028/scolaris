@@ -1,52 +1,49 @@
 (() => {
-  const money = value => BigInt(value).toLocaleString('fr-FR') + ' FCFA';
-  window.ScolarisAmy = {
-    async mount(root, api, profile) {
-      const status = await api('/amy/status');
-      if (!root.isConnected) return;
-      const paused = profile.school_status === 'suspended' && !profile.platformAdmin;
-      root.innerHTML = '<section class="panel"><h2>AMY IA · votre assistante administrative</h2><p>Posez vos questions sur SCOLARIS, analysez les totaux de votre établissement ou préparez un brouillon de synthèse.</p><p class="amy-note">Les indicateurs partagés avec AMY sont des totaux, toutes années scolaires confondues. Les listes nominatives ne sont pas envoyées automatiquement. Évitez les données personnelles dans vos questions.</p><div class="amy-suggestions"><button type="button" class="ghost">Résume la situation financière de l’établissement.</button><button type="button" class="ghost">Comment enregistrer un paiement reçu ?</button><button type="button" class="ghost">Prépare un modèle de relance courtoise.</button></div><div class="amy-thread" role="log" aria-label="Conversation avec AMY" aria-live="polite"></div><p class="amy-status" role="status"></p><form class="amy-form"><label for="amy-question">Votre question à AMY</label><textarea id="amy-question" rows="3" maxlength="2000" required placeholder="Exemple : quelles sont les priorités de recouvrement ?"></textarea><div class="amy-actions"><small>20 questions par heure et par utilisateur · 50 par jour pour l’établissement.</small><button class="action" type="submit">Envoyer à AMY</button></div></form><p class="amy-note">AMY peut se tromper : vérifiez les chiffres et les brouillons avant utilisation. Elle ne modifie aucune donnée et n’envoie aucun message. La conversation disparaît lorsque vous quittez cet onglet.</p></section>';
-      const form = root.querySelector('form'), input = root.querySelector('textarea'), button = form.querySelector('button');
-      const thread = root.querySelector('.amy-thread'), state = root.querySelector('.amy-status');
-      const history = [];
-      let pending = false;
-      const available = status.enabled && !paused;
-      input.disabled = button.disabled = !available;
-      if (!available) state.textContent = paused ? 'AMY sera disponible après la réactivation de votre abonnement.' : 'La connexion à AMY est en cours de configuration.';
-      root.querySelectorAll('.amy-suggestions button').forEach(item => {
-        item.disabled = !available;
-        item.onclick = () => { if (!pending) { input.value = item.textContent; input.focus(); } };
-      });
-      function append(label, text, className) {
-        const box = document.createElement('article'), heading = document.createElement('strong'), content = document.createElement('p');
-        box.className = 'amy-message ' + className;
-        heading.textContent = label; content.textContent = text;
-        box.append(heading,content); thread.append(box); box.scrollIntoView({block:'nearest'});
-        return box;
-      }
-      form.onsubmit = async event => {
-        event.preventDefault();
-        const question = input.value.trim();
-        if (!question || pending || !available) return;
-        pending = true; button.disabled = input.disabled = true; button.textContent = 'AMY réfléchit…'; state.textContent = '';
-        const outgoing = append('Vous',question,'amy-user');
-        try {
-          const result = await api('/amy/chat',{method:'POST',body:JSON.stringify({question,history:history.slice(-4).map(x=>({...x,content:x.content.slice(0,2000)}))})});
-          if (!form.isConnected) return;
-          append('AMY IA',result.answer,'amy-answer');
-          const s = result.snapshot;
-          append('Indicateurs utilisés', 'Toutes années scolaires · '+new Date(s.computedAt).toLocaleString('fr-FR')+'\nAttendu : '+money(s.expectedXof)+' · Payé : '+money(s.paidXof)+' · Reste : '+money(s.balanceXof)+'\nImpayés échus : '+money(s.overdueXof)+' pour '+s.overdueInvoices+' échéance(s).','amy-source');
-          history.push({role:'user',content:question},{role:'assistant',content:result.answer});
-          if (history.length > 4) history.splice(0,history.length-4);
-          input.value = '';
-        } catch (error) {
-          outgoing.remove();
-          if (form.isConnected) state.textContent = error.message || 'AMY est indisponible. Réessayez plus tard.';
-        } finally {
-          pending = false; button.disabled = input.disabled = false; button.textContent = 'Envoyer à AMY';
-          if (form.isConnected) input.focus();
-        }
-      };
-    },
-  };
+  const money=value=>BigInt(value).toLocaleString('fr-FR')+' FCFA',esc=value=>window.ScolarisSecurity.escapeHtml(String(value??''));
+  window.ScolarisAmy={async mount(root,api,profile){
+    if(profile.platformAdmin&&!profile.platformContext){
+      root.innerHTML='<section class="panel"><h2>Bienvenue dans AMY IA</h2><p>Choisissez un établissement pour analyser ses finances et consulter ses documents.</p><button class="action" type="button">Choisir un établissement</button></section>';
+      root.querySelector('button').onclick=()=>{const select=document.querySelector('#schoolContextSelect');select?.focus();select?.scrollIntoView({block:'center'});};return;
+    }
+    async function all(path,limit){const rows=[];for(let offset=0;offset<=100000;offset+=limit){const batch=await api(path+'?'+new URLSearchParams({limit:String(limit),offset:String(offset)}));rows.push(...batch);if(batch.length<limit)return rows;}throw Error('Liste trop volumineuse. Contactez l’assistance.');}
+    const [status,years,classes,library]=await Promise.all([api('/amy/status'),all('/academic-years',100),all('/classes',200),api('/amy/documents')]);
+    if(!root.isConnected)return;
+    const paused=['suspended','grace_period'].includes(profile.school_status)&&!profile.platformAdmin;
+    root.innerHTML=`<section class="panel"><h2>AMY IA · votre assistante administrative</h2><p>Analysez les finances, interrogez les documents et préparez des synthèses.</p>
+      <div class="amy-filters"><div class="field"><label for="amy-year">Année scolaire</label><select id="amy-year"><option value="">Toutes les années</option>${years.map(x=>`<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}</select></div><div class="field"><label for="amy-class">Classe</label><select id="amy-class"></select></div><div class="field"><label for="amy-from">Échéances à partir du</label><input id="amy-from" type="date"></div><div class="field"><label for="amy-to">Échéances jusqu’au</label><input id="amy-to" type="date"></div></div>
+      <p class="amy-note">Les dates filtrent les échéances. Le montant payé comprend tous leurs règlements jusqu’à aujourd’hui. Les listes nominatives ne sont pas envoyées automatiquement.</p>
+      <div class="amy-suggestions"><button type="button" class="ghost">Résume la situation financière de cette sélection.</button><button type="button" class="ghost">Comment enregistrer un paiement reçu ?</button><button type="button" class="ghost">Prépare un modèle de relance courtoise.</button></div><div class="amy-thread" role="log" aria-label="Conversation avec AMY" aria-live="polite"></div><p class="amy-status" role="status"></p><form class="amy-form"><label for="amy-question">Votre question à AMY</label><textarea id="amy-question" rows="3" maxlength="2000" required placeholder="Quelles sont les priorités de recouvrement ?"></textarea><div class="amy-actions"><small>20 questions par heure et par utilisateur · 50 par jour pour l’établissement.</small><button class="action" type="submit">Envoyer à AMY</button></div></form><p class="amy-note">Vérifiez les réponses et les brouillons. AMY ne modifie aucune donnée et n’envoie aucun message. La conversation disparaît lorsque vous quittez cet onglet ou changez les filtres.</p></section>
+      <section class="panel amy-library"><h2>Documents de l’établissement</h2><p>AMY recherche des passages et cite leurs références. Ajoutez les règlements et procédures utiles, sans données personnelles inutiles.</p><div class="amy-doc-list"></div>${library.canManage?'<details><summary>Ajouter un document</summary><form class="amy-document-form"><label for="amy-doc-title">Titre</label><input id="amy-doc-title" maxlength="160" required><label for="amy-doc-file">Importer un fichier texte (.txt ou .md)</label><input id="amy-doc-file" type="file" accept=".txt,.md,text/plain,text/markdown"><label for="amy-doc-content">Texte du document</label><textarea id="amy-doc-content" rows="6" maxlength="50000" required></textarea><small>50 000 caractères par document, 50 documents maximum. Pour un PDF ou Word, copiez ici le texte utile.</small><button class="action" type="submit">Ajouter à la base documentaire</button><p role="status"></p></form></details>':''}</section>`;
+    const form=root.querySelector('.amy-form'),input=form.querySelector('textarea'),button=form.querySelector('button'),thread=root.querySelector('.amy-thread'),state=root.querySelector('.amy-status');
+    const year=root.querySelector('#amy-year'),schoolClass=root.querySelector('#amy-class'),from=root.querySelector('#amy-from'),to=root.querySelector('#amy-to'),controls=[year,schoolClass,from,to],history=[];
+    let pending=false;
+    function classOptions(){schoolClass.innerHTML='<option value="">Toutes les classes</option>'+classes.filter(x=>!year.value||x.academic_year_id===year.value).map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');}classOptions();
+    controls.forEach(control=>control.onchange=()=>{if(control===year)classOptions();history.length=0;thread.replaceChildren();state.textContent='Nouvelle sélection : une nouvelle conversation commence.';});
+    const available=status.enabled&&!paused;input.disabled=button.disabled=!available;
+    if(!available)state.textContent=paused?'AMY sera disponible après la réactivation de votre abonnement.':'La connexion à AMY est en cours de configuration.';
+    root.querySelectorAll('.amy-suggestions button').forEach(item=>{item.disabled=!available;item.onclick=()=>{if(!pending){input.value=item.textContent;input.focus();}};});
+    function append(label,text,className){const box=document.createElement('article'),heading=document.createElement('strong'),content=document.createElement('p');box.className='amy-message '+className;heading.textContent=label;content.textContent=text;box.append(heading,content);thread.append(box);box.scrollIntoView({block:'nearest'});return box;}
+    form.onsubmit=async event=>{
+      event.preventDefault();const question=input.value.trim();if(!question||pending||!available)return;
+      if(from.value&&to.value&&from.value>to.value){state.textContent='La date de début doit précéder la date de fin.';return;}
+      pending=true;button.disabled=input.disabled=true;button.textContent='AMY réfléchit…';state.textContent='';controls.forEach(x=>x.disabled=true);
+      const outgoing=append('Vous',question,'amy-user');
+      try{
+        const filters=Object.fromEntries(Object.entries({academicYearId:year.value,classId:schoolClass.value,from:from.value,to:to.value}).filter(([,v])=>v));
+        const result=await api('/amy/chat',{method:'POST',body:JSON.stringify({question,filters,history:history.slice(-4).map(x=>({...x,content:x.content.slice(0,2000)}))})});if(!form.isConnected)return;
+        append('AMY IA',result.answer,'amy-answer');const s=result.snapshot,selection=s.selection||{};
+        const scope=[selection.academicYear||'Toutes années scolaires',selection.className||'Toutes classes',selection.from?'à partir du '+selection.from:'',selection.to?'jusqu’au '+selection.to:''].filter(Boolean).join(' · ');
+        append('Indicateurs utilisés',scope+'\nDates d’échéance · Calcul du '+new Date(s.computedAt).toLocaleString('fr-FR')+'\nAttendu : '+money(s.expectedXof)+' · Payé : '+money(s.paidXof)+' · Reste : '+money(s.balanceXof)+'\nImpayés échus : '+money(s.overdueXof)+' pour '+s.overdueInvoices+' échéance(s).','amy-source');
+        if(result.sources?.length)append('Documents transmis à AMY',result.sources.map(x=>'['+x.reference+'] '+x.title).join('\n'),'amy-source');
+        history.push({role:'user',content:question},{role:'assistant',content:result.answer});if(history.length>4)history.splice(0,history.length-4);input.value='';
+      }catch(error){outgoing.remove();if(form.isConnected)state.textContent=error.message||'AMY est indisponible.';}
+      finally{pending=false;button.disabled=input.disabled=false;button.textContent='Envoyer à AMY';controls.forEach(x=>x.disabled=false);if(form.isConnected)input.focus();}
+    };
+    function drawDocuments(documents){root.querySelector('.amy-doc-list').innerHTML=documents.length?documents.map(d=>`<div class="amy-doc-row"><span><b>${esc(d.title)}</b><br><small>${d.characters.toLocaleString('fr-FR')} caractères · ${new Date(d.created_at).toLocaleDateString('fr-FR')}</small></span>${library.canManage?`<button type="button" class="ghost" data-delete-document="${esc(d.id)}">Retirer</button>`:''}</div>`).join(''):'<p>Aucun document ajouté.</p>';root.querySelectorAll('[data-delete-document]').forEach(b=>b.onclick=async()=>{if(!confirm('Retirer ce document de la base AMY ?'))return;b.disabled=true;try{await api('/amy/documents/'+b.dataset.deleteDocument,{method:'DELETE',body:'{}'});drawDocuments((await api('/amy/documents')).documents);}catch(e){state.textContent=e.message;b.disabled=false;}});}
+    drawDocuments(library.documents);const docForm=root.querySelector('.amy-document-form');
+    if(docForm){const file=docForm.querySelector('input[type=file]'),content=docForm.querySelector('textarea'),title=docForm.querySelector('#amy-doc-title'),message=docForm.querySelector('[role=status]');docForm.querySelector('button').disabled=paused;
+      file.onchange=async()=>{const chosen=file.files[0];if(!chosen)return;if(!/\.(txt|md)$/i.test(chosen.name)||chosen.size>200000){message.textContent='Choisissez un fichier .txt ou .md de moins de 200 Ko.';return;}const text=await chosen.text();if(text.length>50000){message.textContent='Limite de 50 000 caractères dépassée.';return;}content.value=text;if(!title.value)title.value=chosen.name.slice(0,160);};
+      docForm.onsubmit=async e=>{e.preventDefault();const b=docForm.querySelector('button');b.disabled=true;message.textContent='';try{await api('/amy/documents',{method:'POST',body:JSON.stringify({title:title.value,content:content.value})});docForm.reset();drawDocuments((await api('/amy/documents')).documents);message.textContent='Document disponible pour les prochaines questions.';}catch(error){message.textContent=error.message;}finally{b.disabled=paused;}};
+    }
+  }};
 })();

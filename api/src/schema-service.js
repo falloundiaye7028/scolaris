@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-const schemaFiles = ['schema.sql', 'academic-schema.sql', 'timetable-schema.sql', 'attendance-schema.sql', 'grades-schema.sql', 'fee-schema.sql', 'actor-schema.sql'];
+const schemaFiles = ['schema.sql', 'academic-schema.sql', 'timetable-schema.sql', 'attendance-schema.sql', 'grades-schema.sql', 'fee-schema.sql', 'actor-schema.sql', 'improvements-schema.sql'];
 
 export async function applySchema(pool) {
   const schemas = await Promise.all(schemaFiles.map(file => readFile(new URL(file, import.meta.url), 'utf8')));

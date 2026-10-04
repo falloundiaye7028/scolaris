@@ -58,7 +58,7 @@ export function createAcademicRouter({ pool, body, json, identifier, isoDate, pa
     if (route === "GET /api/academic-years") {
       const { limit, offset } = pagination(url.searchParams, { defaultLimit: 50, maxLimit: 100 });
       const result = await pool.query(
-        "SELECT id,label,starts_on,ends_on,is_current,created_at,updated_at FROM academic_years WHERE school_id=$1 ORDER BY starts_on DESC LIMIT $2 OFFSET $3",
+        "SELECT id,label,starts_on,ends_on,is_current,created_at,updated_at FROM academic_years WHERE school_id=$1 ORDER BY starts_on DESC,id LIMIT $2 OFFSET $3",
         [me.schoolId, limit, offset],
       );
       json(res, 200, result.rows);
@@ -132,7 +132,7 @@ export function createAcademicRouter({ pool, body, json, identifier, isoDate, pa
          JOIN academic_years AS year
            ON year.id=class.academic_year_id AND year.school_id=class.school_id
          WHERE class.school_id=$1 AND ($2::uuid IS NULL OR class.academic_year_id=$2)
-         ORDER BY year.starts_on DESC,class.name LIMIT $3 OFFSET $4`,
+         ORDER BY year.starts_on DESC,class.name,class.id LIMIT $3 OFFSET $4`,
         [me.schoolId, academicYearId, limit, offset],
       );
       json(res, 200, result.rows);

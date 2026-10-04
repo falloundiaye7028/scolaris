@@ -909,6 +909,10 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const unlinkedGuardian = (await admin.query("INSERT INTO guardians(school_id,full_name) VALUES($1,'Parent non lié fictif') RETURNING id", [schoolA])).rows[0];
   assert.equal((await request("/api/reminders", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ guardianId: unlinkedGuardian.id, invoiceId: invoice.id, channel: "email", message: "Rappel fictif" }) })).status, 404);
 
+  const { verifyImprovements } = await import('../test-support/improvements.js');
+  const improvementsPool = new pg.Pool({ connectionString: databaseUrl });
+  try { await verifyImprovements({pool:improvementsPool,request,cookie,schoolA,schoolB}); } finally { await improvementsPool.end(); }
+
   const teacherLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "teacher-a@example.test", password: "MotDePasse#2026" }) });
   const teacherCookie = teacherLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request("/api/invoices", { headers: { cookie: teacherCookie } })).status, 403);

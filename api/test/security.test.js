@@ -3,6 +3,21 @@ import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+
+test("la vue initiale accepte uniquement les écrans internes et refuse les URL", async () => {
+  const html = await readFile(new URL("../src/private-app.html", import.meta.url), "utf8");
+  const declaration = html.match(/^function initialWorkspaceView[^\n]+/m)?.[0];
+  assert.ok(declaration);
+  const context = { landingForUser: profile => profile.platformAdmin ? "clients" : "dashboard" };
+  vm.runInNewContext(`${declaration};this.choose=initialWorkspaceView`, context);
+  for (const view of ["amy", "students", "reminders", "online", "security"]) {
+    assert.equal(context.choose(view, {}), view);
+  }
+  for (const value of [null, "", "https://example.test", "//example.test", "javascript:alert(1)", "constructor", "__proto__", "amy?school=other", "%61my"]) {
+    assert.equal(context.choose(value, {}), "dashboard");
+    assert.equal(context.choose(value, { platformAdmin: true }), "clients");
+  }
+});
 import {
   clearSessionCookie,
   hasPermission,
@@ -193,7 +208,9 @@ test("le landing et les capacités client suivent le rôle sans élargir le RBAC
   assert.match(privateHtml, /data-feature="grades"/);
   assert.match(privateHtml, /data-feature="attendance"/);
   assert.match(privateHtml, /data-feature="timetable"/);
-  assert.match(privateHtml, /Consultation en lecture seule/);
+  assert.match(await readFile(new URL("../../web/workspace-enhancements.js", import.meta.url), "utf8"), /Consultation en lecture seule/);
+  assert.equal(context.canUseFeature(profile("owner",{platformAdmin:true}), "amy"),true);
+  assert.equal(context.canUseFeature(profile("teacher"), "amy"),false);
   assert.match(privateHtml, /canUseFeature\(user,'studentsWrite'\)/);
   assert.match(privateHtml, /canUseFeature\(user,'studentFinancial'\)/);
 });
