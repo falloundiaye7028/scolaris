@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import test from "node:test";
+import { amySnapshot } from "../src/amy-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const totp = (secret) => {
@@ -260,6 +261,8 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal((await request(`/api/student-guardians?studentId=${schoolAStudent}`, { headers: { cookie: m2TeacherCookie } })).status, 403);
   assert.equal((await request("/api/invoices", { headers: { cookie: m2TeacherCookie } })).status, 403);
   assert.equal((await request("/api/payments", { headers: { cookie: m2TeacherCookie } })).status, 403);
+  assert.equal((await request("/api/amy/status", {headers:{cookie:m2TeacherCookie}})).status,403);
+  assert.equal((await request("/api/amy/chat", {method:"POST",headers:{cookie:m2TeacherCookie,"content-type":"application/json"},body:JSON.stringify({question:"Bonjour"})})).status,403);
   const ownSchedule = await request("/api/timetable-entries", { headers: { cookie: m2TeacherCookie } });
   assert.equal(ownSchedule.status, 200);
   assert.ok((await ownSchedule.json()).every((entry) => entry.teacher_id === teacherA.id));
@@ -327,6 +330,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const m3AccountantCookie = m3AccountantLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request("/api/attendance/history?from=2026-09-01&to=2026-09-30", { headers: { cookie: m3AccountantCookie, "user-agent": "M3 Accountant" } })).status, 403);
   const m3SchoolBLogin = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "user-agent": "M3 School B" }, body: JSON.stringify({ email: "direction-b@example.test", password: "MotDePasse#2026" }) });
+  assert.equal((await request("/api/amy/status", {headers:{cookie:m3AccountantCookie,"user-agent":"M3 Accountant"}})).status,200);
   const m3SchoolBCookie = m3SchoolBLogin.headers.get("set-cookie").split(";")[0];
   assert.equal((await request(`/api/attendance/sessions/${callSession.id}/roster`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
   assert.equal((await request(`/api/attendance/justifications/${attendanceDocument.id}`, { headers: { cookie: m3SchoolBCookie, "user-agent": "M3 School B" } })).status, 404);
@@ -871,7 +875,15 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal(largePayment.status, 201);
   const totals = await request("/api/dashboard", { headers: { cookie } });
   assert.equal(totals.status, 200);
-  assert.ok(Number((await totals.json()).paid) >= 300_000_000_000);
+  const dashboardTotals = await totals.json();
+  assert.ok(Number(dashboardTotals.paid) >= 300_000_000_000);
+  const amyTotals = await amySnapshot(admin,schoolA);
+  assert.equal(BigInt(amyTotals.paidXof)*100n,BigInt(dashboardTotals.paid));
+  assert.equal(BigInt(amyTotals.expectedXof)*100n,BigInt(dashboardTotals.expected));
+  assert.equal(amyTotals.invoiceCount,dashboardTotals.invoice_count);
+  const otherSchoolTotals = await amySnapshot(admin,schoolB);
+  assert.notEqual(amyTotals.paidXof,otherSchoolTotals.paidXof);
+  assert.equal(Object.keys(amyTotals).some(key=>/name|email|phone/i.test(key)),false);
 
   const ledgerStudent = (await admin.query("INSERT INTO students(school_id,matricule,first_name,last_name) VALUES($1,'LEDGER-501','Historique','Complet') RETURNING id", [schoolA])).rows[0];
   await admin.query("INSERT INTO invoices(school_id,student_id,label,amount_minor,currency,due_date,fee_type,amount_expected_xof,amount_due_xof,balance_xof) SELECT $1,$2,'Historique '||n,10000,'XOF',CURRENT_DATE-1,'other',100,100,100 FROM generate_series(1,501) n", [schoolA, ledgerStudent.id]);

@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const files = {
+  "/amy-assistant.js": ["amy-assistant.js", "text/javascript; charset=utf-8"],
+  "/amy-assistant.css": ["amy-assistant.css", "text/css; charset=utf-8"],
   "/": ["index.html", "text/html; charset=utf-8"],
   "/connexion": ["connexion.html", "text/html; charset=utf-8"],
   "/inscription-ecole": ["inscription-ecole.html", "text/html; charset=utf-8"],

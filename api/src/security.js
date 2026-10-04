@@ -167,6 +167,7 @@ export function hasPermission(role, permission) {
 }
 
 export function permissionFor(method, pathname) {
+  if (pathname.startsWith("/api/amy/")) return "billing.read";
   if (method === "GET") {
     if (pathname === "/api/grade-reports.csv") return "grade_reports.export";
     if (pathname.startsWith("/api/grade-reports")) return "grade_reports.read";
