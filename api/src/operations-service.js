@@ -31,9 +31,9 @@ export function createOperationsRouter({pool,json}) {
     if(req.method==='GET'&&url.pathname==='/api/platform/overview'){
       if(!me.platformAdmin){json(res,403,{error:'Accès super-administrateur requis.'});return true;}
       const [months,renewals,totals]=await Promise.all([
-        pool.query(`WITH months AS (SELECT generate_series(date_trunc('month',now())-interval '11 months',date_trunc('month',now()),interval '1 month') month)
-          SELECT to_char(m.month,'YYYY-MM') month,count(p.id)::int payments,COALESCE(sum(p.amount_received_xof),0)::text amount_xof
-          FROM months m LEFT JOIN platform_subscription_payments p ON p.status='confirmed' AND p.paid_at>=m.month AND p.paid_at<m.month+interval '1 month' GROUP BY m.month ORDER BY m.month`),
+        pool.query(`WITH months AS (SELECT generate_series(date_trunc('month',now())-interval '11 months',date_trunc('month',now()),interval '1 month') AS month_start)
+          SELECT to_char(m.month_start,'YYYY-MM') AS month,count(p.id)::int payments,COALESCE(sum(p.amount_received_xof),0)::text amount_xof
+          FROM months m LEFT JOIN platform_subscription_payments p ON p.status='confirmed' AND p.paid_at>=m.month_start AND p.paid_at<m.month_start+interval '1 month' GROUP BY m.month_start ORDER BY m.month_start`),
         pool.query(`SELECT s.id,s.name,ss.paid_until,s.subscription_status FROM schools s JOIN school_subscriptions ss ON ss.school_id=s.id
           WHERE NOT ss.is_exempt AND s.deletion_requested_at IS NULL AND s.subscription_status IN ('active','grace_period','suspended') AND ss.paid_until<=now()+interval '14 days'
           ORDER BY ss.paid_until,s.id LIMIT 100`),

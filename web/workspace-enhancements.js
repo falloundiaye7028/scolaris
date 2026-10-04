@@ -31,9 +31,15 @@
       root.querySelector('#studentsPrev').onclick=()=>{s.offset=Math.max(0,s.offset-30);load();};root.querySelector('#studentsNext').onclick=()=>{s.offset+=30;load();};await load();
     },
     async overview(root,api){
+      try {
       const data=await api('/platform/overview');if(!root.isConnected)return;
       const months=data.months,max=months.reduce((a,m)=>BigInt(m.amount_xof)>a?BigInt(m.amount_xof):a,1n);
       root.innerHTML=`<section class="panel"><h2>Abonnements · évolution sur 12 mois</h2><p>Règlements confirmés, selon leur date d’encaissement.</p><div class="month-chart">${months.map(m=>`<div class="month-bar"><span>${esc(m.month)}</span><div><i style="width:${Number(BigInt(m.amount_xof)*10000n/max)/100}%"></i></div><b>${money(m.amount_xof)}</b><small>${m.payments} règlement(s)</small></div>`).join('')}</div></section><section class="panel renewal-panel"><h2>Renouvellements à traiter</h2><p>Échéances passées ou prévues sous 14 jours · jusqu’à 100 établissements.</p>${data.renewals.length?data.renewals.map(s=>`<div class="renewal-row"><span><b>${esc(s.name)}</b><br><small>Échéance : ${new Date(s.paid_until).toLocaleDateString('fr-FR')}</small></span><a class="ghost" href="/app?school=${encodeURIComponent(s.id)}">Ouvrir l’école</a></div>`).join(''):'<p>Aucun renouvellement à traiter.</p>'}</section>`;
+      } catch {
+        if(!root.isConnected)return;
+        root.innerHTML='<section class="panel"><p role="status">Les statistiques d’abonnement sont temporairement indisponibles. La liste des établissements et les règlements restent accessibles.</p><button class="ghost" type="button">Réessayer les statistiques</button></section>';
+        root.querySelector('button').onclick=()=>window.ScolarisWorkspace.overview(root,api);
+      }
     },
     async reminders(root,api){
       const config=await api('/reminders/config');if(!root.isConnected)return;
