@@ -9,7 +9,7 @@ const me={schoolId:'school-A',sub:'user-A',role:'director'};
 const snapshot={computed_at:new Date('2026-10-04T00:00:00Z'),active_students:2,invoice_count:3,outstanding_invoices:1,overdue_invoices:1,expected_xof:'10000',paid_xof:'4000',balance_xof:'6000',overdue_xof:'6000'};
 function fixture(options={}) {
   const calls=[],queries=[],responses=[];
-  const pool={query:async(sql,args)=>{queries.push({sql,args});return {rows:[snapshot]}}};
+  const pool={query:async(sql,args)=>{queries.push({sql,args});return {rows:sql.includes("amy_document_chunks")?[]:[snapshot]}}};
   const router=createAmyRouter({pool,json:(_res,status,data)=>responses.push({status,data}),body:async()=>({question:'Quel est le solde ?',history:[]}),
     env:{AMY_SCOLARIS_SECRET:secret},fetchImpl:async(url,request)=>{calls.push({url,request});return Response.json({answer:'Il reste 6 000 FCFA.'})},...options});
   return {calls,queries,responses,router,run:async(profile=me,path='/api/amy/chat',method='POST')=>router({method},{},new URL('https://scolaris.test'+path),profile)};
@@ -32,7 +32,7 @@ test('AMY never calls upstream or loads totals for a teacher or missing platform
 test('AMY transmits only server-computed aggregates and opaque references for the current school',async()=>{
   const f=fixture();await f.run();
   assert.equal(f.responses[0].status,200);
-  assert.deepEqual(f.queries[0].args,['school-A']);
+  assert.deepEqual(f.queries[0].args,['school-A',null,null,null,null]);
   const sent=JSON.parse(f.calls[0].request.body);
   assert.match(sent.schoolReference,/^[a-f0-9]{64}$/);assert.match(sent.userReference,/^[a-f0-9]{64}$/);
   assert.equal(sent.snapshot.expectedXof,'10000');assert.equal(sent.snapshot.scope,'all_school_years');
@@ -40,7 +40,7 @@ test('AMY transmits only server-computed aggregates and opaque references for th
   assert.ok(!JSON.stringify(f.responses).includes(secret));
   const second=fixture();await second.run({...me,schoolId:'school-B'});
   assert.notEqual(JSON.parse(second.calls[0].request.body).schoolReference,sent.schoolReference);
-  assert.equal(f.queries[1].args[2],'amy.consulted');assert.ok(!JSON.stringify(f.queries[1]).includes('Quel est le solde'));
+  assert.equal(f.queries[2].args[2],'amy.consulted');assert.ok(!JSON.stringify(f.queries[2]).includes('Quel est le solde'));
 });
 test('AMY is disabled without configuration and refuses insecure endpoints',async()=>{
   assert.equal(amyConfig({}),null);assert.equal(amyConfig({AMY_SCOLARIS_SECRET:secret,AMY_SCOLARIS_URL:'http://amy.test/api'}),null);

@@ -193,7 +193,9 @@ test("le landing et les capacités client suivent le rôle sans élargir le RBAC
   assert.match(privateHtml, /data-feature="grades"/);
   assert.match(privateHtml, /data-feature="attendance"/);
   assert.match(privateHtml, /data-feature="timetable"/);
-  assert.match(privateHtml, /Consultation en lecture seule/);
+  assert.match(await readFile(new URL("../../web/workspace-enhancements.js", import.meta.url), "utf8"), /Consultation en lecture seule/);
+  assert.equal(context.canUseFeature(profile("owner",{platformAdmin:true}), "amy"),true);
+  assert.equal(context.canUseFeature(profile("teacher"), "amy"),false);
   assert.match(privateHtml, /canUseFeature\(user,'studentsWrite'\)/);
   assert.match(privateHtml, /canUseFeature\(user,'studentFinancial'\)/);
 });

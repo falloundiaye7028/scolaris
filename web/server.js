@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const files = {
+  "/workspace-enhancements.js": ["workspace-enhancements.js", "text/javascript; charset=utf-8"],
+  "/workspace-enhancements.css": ["workspace-enhancements.css", "text/css; charset=utf-8"],
+  "/paiement-retour.html": ["paiement-retour.html", "text/html; charset=utf-8"],
   "/amy-assistant.js": ["amy-assistant.js", "text/javascript; charset=utf-8"],
   "/amy-assistant.css": ["amy-assistant.css", "text/css; charset=utf-8"],
   "/": ["index.html", "text/html; charset=utf-8"],
