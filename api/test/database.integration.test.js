@@ -704,6 +704,17 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   const platformMfaConfirm = await request("/api/auth/mfa/confirm", { method: "POST", headers: { ...platformHeaders, cookie: platformCookie }, body: JSON.stringify({ code: totp(platformMfaSecret) }) });
   assert.equal(platformMfaConfirm.status, 200);
 
+  const overviewHeaders = { ...platformHeaders, cookie: platformCookie };
+  const emptyOverviewResponse = await request("/api/platform/overview", { headers: overviewHeaders });
+  assert.equal(emptyOverviewResponse.status, 200);
+  const emptyOverview = await emptyOverviewResponse.json();
+  assert.equal(emptyOverview.months.length, 12);
+  assert.ok(emptyOverview.months.every(month => /^\d{4}-\d{2}$/.test(month.month) && month.payments === 0 && month.amount_xof === "0"));
+  assert.deepEqual(emptyOverview.months.map(month => month.month), [...emptyOverview.months.map(month => month.month)].sort());
+  assert.equal(new Set(emptyOverview.months.map(month => month.month)).size, 12);
+  assert.equal(emptyOverview.totals.schools, 2);
+  assert.equal((await request("/api/platform/overview", { headers: { cookie } })).status, 403);
+
   const schoolContextHeaders = { cookie: platformCookie, "user-agent": "Platform Integration Test", "x-scolaris-school-context": schoolA };
   const contextualProfile = await request("/api/me", { headers: schoolContextHeaders });
   assert.equal(contextualProfile.status, 200);
