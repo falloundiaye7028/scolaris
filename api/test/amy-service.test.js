@@ -1,9 +1,10 @@
 import test from 'node:test';
+import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 import { amyConfig, amyInput, canUseAmy, createAmyRouter } from '../src/amy-service.js';
 import { permissionFor, hasPermission } from '../src/security.js';
 
-const secret='test-amy-integration-secret-32-characters';
+const secret=crypto.randomBytes(32).toString('hex');
 const me={schoolId:'school-A',sub:'user-A',role:'director'};
 const snapshot={computed_at:new Date('2026-10-04T00:00:00Z'),active_students:2,invoice_count:3,outstanding_invoices:1,overdue_invoices:1,expected_xof:'10000',paid_xof:'4000',balance_xof:'6000',overdue_xof:'6000'};
 function fixture(options={}) {

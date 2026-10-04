@@ -9,3 +9,10 @@ f0e08361d2e5f1005c6b4c8a5d388b9b3bcb9ca4:.env.example:generic-api-key:2
 api/test/database.integration.test.js:generic-api-key:25
 f0e08361d2e5f1005c6b4c8a5d388b9b3bcb9ca4:api/test/database.integration.test.js:generic-api-key:12
 6bb8a8c03bcb5f675c1dba6e24c86d9d65b7efad:api/test/database.integration.test.js:generic-api-key:12
+
+# Review: 2026-10-04. Exact historical fingerprints of synthetic test-only
+# credentials introduced by the unmerged AMY commit; no runtime credential.
+# The new AMY fixture is generated in memory and the existing JWT fixture
+# remains at its previously reviewed location. No path-wide exclusions.
+8fa34fb4f3d66281bdcb8df822ca6495c243864b:api/test/amy-service.test.js:generic-api-key:6
+8fa34fb4f3d66281bdcb8df822ca6495c243864b:api/test/database.integration.test.js:generic-api-key:26

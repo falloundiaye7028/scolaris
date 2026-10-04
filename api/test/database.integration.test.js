@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import test from "node:test";
-import { amySnapshot } from "../src/amy-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const totp = (secret) => {
@@ -877,6 +876,7 @@ test("connexion, limitation, sessions, RBAC et isolation multi-établissements",
   assert.equal(totals.status, 200);
   const dashboardTotals = await totals.json();
   assert.ok(Number(dashboardTotals.paid) >= 300_000_000_000);
+  const { amySnapshot } = await import("../src/amy-service.js");
   const amyTotals = await amySnapshot(admin,schoolA);
   assert.equal(BigInt(amyTotals.paidXof)*100n,BigInt(dashboardTotals.paid));
   assert.equal(BigInt(amyTotals.expectedXof)*100n,BigInt(dashboardTotals.expected));
