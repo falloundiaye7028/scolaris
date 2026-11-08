@@ -23,7 +23,7 @@
     "argon2@0.45.1": true
   },
   "dependencies": {
-    "argon2": "0.45.1",
+    "argon2": "0.45.2",
     "bcryptjs": "3.0.3",
     "fflate": "0.7.5",
     "jsonwebtoken": "9.0.3",
